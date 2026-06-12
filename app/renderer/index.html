@@ -1,12 +1,19 @@
 <!DOCTYPE html>
 <html lang="ko">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ADAS - ADHD Classroom Simulation</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>ADAS - ADHD Classroom Simulation</title>
+    </head>
+    <body>
+        <div id="root"></div>
+        <script>
+            // Auto-start demo mode: connect to server.py on :8000 and
+            // automatically run a v2 multi-student session (no clicks).
+            window.adas = window.adas || {};
+            window.adas.backendUrl = "ws://localhost:8000/ws";
+            window.adas.autoStart = { mode: "v2", n_students: 20 };
+        </script>
+        <script type="module" src="/src/main.jsx"></script>
+    </body>
 </html>

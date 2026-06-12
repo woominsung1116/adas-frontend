@@ -7,6 +7,7 @@ import StudentGrid from "./components/StudentGrid";
 import GrowthPanel from "./components/GrowthPanel";
 
 const WS_URL = window.adas?.backendUrl || "ws://localhost:8000/ws";
+const MONITOR_MODE_DEFAULT = !!window.adas?.monitorMode;
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -76,6 +77,14 @@ export default function App() {
   const [v2MaxTurns, setV2MaxTurns] = useState(950);
   const [v2Archetype, setV2Archetype] = useState("");
 
+  // Monitor mode state (read-only live monitor of v16/v17 runs)
+  const [monitorActive, setMonitorActive] = useState(false);
+  const [monitorTargets, setMonitorTargets] = useState([]);
+  const [monitorTarget, setMonitorTarget] = useState(null);
+  const [monitorClasses, setMonitorClasses] = useState({}); // {arm_class: summary}
+  const [monitorMetrics, setMonitorMetrics] = useState({ baseline: [], policy: [] });
+  const [monitorLog, setMonitorLog] = useState([]);
+
   const wsRef = useRef(null);
 
   const connect = useCallback(() => {
@@ -92,8 +101,22 @@ export default function App() {
 
       switch (data.type) {
         case "init":
+          // Monitor adapter sends init with mode="monitor"
+          if (data.mode === "monitor") {
+            setMonitorActive(true);
+            setMonitorTargets(data.available_targets || []);
+            setEvents((prev) => [...prev, { ...data, type: "monitor_init" }]);
+            break;
+          }
           setProfiles(data.profiles || []);
           setScenarios(data.scenarios || []);
+          // Auto-start (window.adas.autoStart): kick off session after init
+          if (window.adas?.autoStart) {
+            const cfg = window.adas.autoStart;
+            const payload = { type: "start_session", mode: cfg.mode || "v2", n_students: cfg.n_students || 30 };
+            if (cfg.mode === "multi") payload.adhd_prevalence = cfg.adhd_prevalence ?? 0.09;
+            try { wsRef.current?.send(JSON.stringify(payload)); } catch (e) { console.warn("autoStart failed:", e); }
+          }
           break;
 
         // ---- Classic mode ----
@@ -144,6 +167,43 @@ export default function App() {
 
         case "class_complete":
           setEvents((prev) => [...prev, data]);
+          // Monitor mode: class_complete has {arm, class_id, summary}
+          if (monitorActive || data.arm) {
+            const key = `${data.arm}_${data.class_id}`;
+            setMonitorClasses((prev) => ({ ...prev, [key]: data }));
+            // Update growth panel with summary metrics if present
+            if (data.summary) {
+              const s = data.summary;
+              if (s.sensitivity != null) {
+                setGrowthData((prev) => {
+                  const history = prev?.history || {};
+                  return {
+                    totalClasses: data.class_id,
+                    sensitivity: s.sensitivity,
+                    specificity: s.specificity,
+                    f1: s.f1,
+                    ppv: s.ppv,
+                    auprc: null,
+                    macro_f1: null,
+                    history: {
+                      sensitivity: [...(history.sensitivity || []), s.sensitivity],
+                      specificity: [...(history.specificity || []), s.specificity],
+                      f1: [...(history.f1 || []), s.f1],
+                      ppv: [...(history.ppv || []), s.ppv],
+                      auprc: [...(history.auprc || []), null],
+                      macro_f1: [...(history.macro_f1 || []), null],
+                    },
+                  };
+                });
+              }
+              // Reflect memory growth on student grid via badges
+              setClassId(data.class_id);
+              setManagedCount(s.true_positives ?? 0);
+              setTotalAdhd((s.true_positives ?? 0) + (s.false_negatives ?? 0));
+              setIdentifiedCount(s.n_identified ?? 0);
+            }
+            break;
+          }
           if (data.growth && Object.keys(data.growth).length > 0) {
             setGrowthData((prev) => {
               const g = data.growth;
@@ -173,11 +233,33 @@ export default function App() {
           }
           break;
 
+        // ---- Monitor mode (read-only adapter) ----
+        case "class_metric": {
+          setMonitorMetrics((prev) => {
+            const arm = data.arm || "baseline";
+            const next = { ...prev };
+            next[arm] = [...(prev[arm] || []), { class_id: data.class_id, row: data.row }];
+            return next;
+          });
+          setEvents((prev) => [...prev, data]);
+          break;
+        }
+
+        case "log_event":
+          setMonitorLog((prev) => [...prev.slice(-200), data.line]);
+          setEvents((prev) => [...prev, data]);
+          break;
+
+        case "selected":
+          setMonitorTarget(data.target);
+          setEvents((prev) => [...prev, { ...data, type: "monitor_selected" }]);
+          break;
+
         default:
           break;
       }
     };
-  }, []);
+  }, [monitorActive, mode]);
 
   useEffect(() => {
     if (window.adas?.onBackendReady) {
@@ -199,7 +281,21 @@ export default function App() {
     }
   };
 
+  const selectMonitorTarget = (target) => {
+    setMonitorClasses({});
+    setMonitorMetrics({ baseline: [], policy: [] });
+    setMonitorLog([]);
+    setGrowthData(null);
+    setClassId(null);
+    setMonitorTarget(target);
+    send({ type: "select", target });
+  };
+
   const startSession = (profile, scenario) => {
+    if (monitorActive) {
+      // Monitor mode: user must pick a target instead.
+      return;
+    }
     setEvents([]);
     setSimState(null);
     setStudents([]);
@@ -214,9 +310,9 @@ export default function App() {
     setActiveScenario(scenario || null);
 
     if (mode === "v2") {
-      send({ type: "start_session", mode: "v2", n_students: 20 });
+      send({ type: "start_session", mode: "v2", n_students: 30 });
     } else if (mode === "multi") {
-      send({ type: "start_session", mode: "multi", n_students: 20, adhd_prevalence: 0.09 });
+      send({ type: "start_session", mode: "multi", n_students: 30, adhd_prevalence: 0.09 });
     } else {
       send({ type: "start_session", mode: "classic", profile, scenario });
     }
@@ -283,7 +379,12 @@ export default function App() {
     <div style={styles.container}>
       <header style={styles.header}>
         <h1 style={styles.title}>ADAS</h1>
-        <span style={styles.subtitle}>ADHD Classroom Behavioral Simulation</span>
+        <span style={styles.subtitle}>
+          {monitorActive ? "Live Monitor (v16/v17 read-only)" : "ADHD Classroom Behavioral Simulation"}
+        </span>
+        {monitorActive && monitorTarget && (
+          <span style={styles.classBadge}>Target: {monitorTarget}</span>
+        )}
         {isMulti && classId != null && (
           <span style={styles.classBadge}>Class #{classId}</span>
         )}
@@ -296,6 +397,30 @@ export default function App() {
           {connected ? "Connected" : "Connecting..."}
         </span>
       </header>
+
+      {monitorActive && (
+        <div style={styles.monitorBar}>
+          <span style={{ fontSize: 12, color: "#94a3b8", marginRight: 8 }}>Select run:</span>
+          {monitorTargets.map((t) => (
+            <button
+              key={t}
+              onClick={() => selectMonitorTarget(t)}
+              style={{
+                ...styles.targetBtn,
+                background: monitorTarget === t ? "#3b82f6" : "#1e293b",
+                color: monitorTarget === t ? "#fff" : "#cbd5e1",
+              }}
+            >
+              {t}
+            </button>
+          ))}
+          {monitorTarget && (
+            <span style={{ marginLeft: "auto", fontSize: 11, color: "#94a3b8" }}>
+              baseline rows: {monitorMetrics.baseline.length} · policy rows: {monitorMetrics.policy.length} · snapshots: {Object.keys(monitorClasses).length}
+            </span>
+          )}
+        </div>
+      )}
 
       <div style={styles.main}>
         {/* Left: classroom view + (multi) student grid */}
@@ -326,22 +451,24 @@ export default function App() {
 
         {/* Right: controls + state + log (+ growth for multi) */}
         <div style={styles.right}>
-          <ControlPanel
-            profiles={profiles}
-            scenarios={scenarios}
-            running={running}
-            onStart={startSession}
-            mode={mode}
-            onModeChange={handleModeChange}
-            paused={paused}
-            onPause={handlePause}
-            onResume={handleResume}
-            speed={speed}
-            onSpeedChange={handleSpeedChange}
-            classId={classId}
-            managedCount={managedCount}
-            totalAdhd={totalAdhd}
-          />
+          {!monitorActive && (
+            <ControlPanel
+              profiles={profiles}
+              scenarios={scenarios}
+              running={running}
+              onStart={startSession}
+              mode={mode}
+              onModeChange={handleModeChange}
+              paused={paused}
+              onPause={handlePause}
+              onResume={handleResume}
+              speed={speed}
+              onSpeedChange={handleSpeedChange}
+              classId={classId}
+              managedCount={managedCount}
+              totalAdhd={totalAdhd}
+            />
+          )}
 
           <StatePanel
             state={simState}
@@ -349,11 +476,11 @@ export default function App() {
             multiState={multiStateProps}
           />
 
-          {isMulti && (
-            <GrowthPanel growthData={growthData} mode={mode} />
+          {(isMulti || monitorActive) && (
+            <GrowthPanel growthData={growthData} mode={monitorActive ? "monitor" : mode} />
           )}
 
-          <ChatLog events={events} mode={mode} />
+          <ChatLog events={events} mode={monitorActive ? "monitor" : mode} />
         </div>
       </div>
     </div>
@@ -401,6 +528,23 @@ const styles = {
   status: {
     fontSize: 12,
     fontWeight: 600,
+  },
+  monitorBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "8px 16px",
+    background: "#0b1220",
+    borderBottom: "1px solid #1e293b",
+    flexWrap: "wrap",
+  },
+  targetBtn: {
+    fontSize: 12,
+    padding: "4px 10px",
+    border: "1px solid #334155",
+    borderRadius: 4,
+    cursor: "pointer",
+    fontFamily: "monospace",
   },
   main: {
     flex: 1,

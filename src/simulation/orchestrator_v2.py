@@ -23,6 +23,7 @@ Usage (with LLM backend):
 
 from __future__ import annotations
 
+import os
 import random
 from dataclasses import dataclass, field
 from typing import Any, Generator, Optional, Dict, List
@@ -62,6 +63,43 @@ BASE_TEACHER_EMOTIONAL: dict[str, float] = {
 
 def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, x))
+
+
+def _omc_conf_threshold() -> float:
+    import os
+    try:
+        return float(os.environ.get("OMC_CONF_THRESHOLD", "0.90"))
+    except Exception:
+        return 0.90
+
+
+def _care_disabled() -> bool:
+    """부주의형 재설계 (redesign.md §2): treatment-care arm toggle.
+
+    When ``OMC_CARE_DISABLED=1`` the orchestrator suppresses Phase 4 (care)
+    and Phase 5 (maintenance/relapse) interventions and the via-care student
+    growth, narrowing the deliverable to *detection / screening*. The
+    differential-diagnosis probe (Step ④ hypothesis testing, Phase 2b/2c) is
+    KEPT — it is an identification mechanism, not care. The cross-class memory
+    accumulation that drives the agent's detection thesis is ALSO kept; only
+    within-class therapeutic improvement is removed. Defaults ON for the
+    redesign run; set to ``0`` to restore the care arm.
+    """
+    import os
+    return os.environ.get("OMC_CARE_DISABLED", "1") == "1"
+
+
+def _emotion_disabled() -> bool:
+    """부주의형 재설계 (redesign.md §2): teacher-emotion arm toggle.
+
+    When ``OMC_EMOTION_DISABLED=1`` the 7-dimension teacher emotional state is
+    frozen at its literature-fixed baseline (no per-turn updates) and the
+    burnout→identification-threshold coupling is removed. The code path is
+    kept intact (ablatable) so a future "번아웃×식별" arm can re-enable it by
+    setting the flag to ``0``. Defaults ON for the redesign run.
+    """
+    import os
+    return os.environ.get("OMC_EMOTION_DISABLED", "1") == "1"
 
 
 @dataclass
@@ -296,6 +334,8 @@ class PhaseConfig:
     care_end: int = 700             # Phase 4 -> 5
     # Phase 5 runs until class ends (950)
 
+
+
 # ---------------------------------------------------------------------------
 # Core simulation modules
 # ---------------------------------------------------------------------------
@@ -310,6 +350,7 @@ try:
         MANAGED_COMPLIANCE,
         MANAGED_CONSECUTIVE,
         CLASSROOM_ARCHETYPES,
+        _TEACHING_MODES,
     )
 except ImportError as e:
     raise ImportError(
@@ -410,6 +451,29 @@ _BEHAVIOR_TO_DSM5: dict[str, str] = {
     "daydreaming":                 "inattention_2",
     "loses_materials":             "inattention_7",
     "off-task":                    "inattention_2",
+    # Step ① (inattentive redesign): observable inattentive behavior
+    # strings emitted by cognitive_agent / surfaced by
+    # ClassroomV2._visible_behaviors. Map the raw env strings
+    # directly (track.all_behaviors feeds _behaviors_to_dsm5 with
+    # untranslated env strings). K-ARS inattention items 2/3/4/6/7.
+    "staring_blankly":             "inattention_2",   # K-ARS item 3 (sustained attn)
+    "off_task_gaze":               "inattention_2",   # K-ARS item 3
+    "not_following_instructions":  "inattention_4",   # K-ARS item 7
+    "slow_to_start":               "inattention_6",   # K-ARS item 11 (avoids effort)
+    "incomplete_work":             "inattention_4",   # K-ARS item 7
+    "loses_place":                 "inattention_7",   # K-ARS item 13
+    "doesnt_respond_when_called":  "inattention_3",   # K-ARS item 5 (NEW)
+    # Step ① 확장 (전환 곤란 + 재집중 지연): transition-failure behaviors
+    # emitted by cognitive_agent on a subject/activity/engagement transition,
+    # plus the post-distraction slow-refocus signal. The executive-function
+    # transition deficit is absorbed into the existing inattention criteria
+    # (follow-through / organization / daily forgetfulness); the refocus lag
+    # reinforces the sustained-attention criterion.
+    "still_on_previous_task":      "inattention_4",   # fails to follow through
+    "didnt_prepare_materials":     "inattention_9",   # forgetful in daily activity
+    "slow_to_transition":          "inattention_5",   # difficulty organizing
+    "lost_during_move":            "inattention_5",   # difficulty organizing
+    "slow_to_refocus":             "inattention_2",   # difficulty sustaining attn
     # Hyperactivity / Impulsivity
     "seat-leaving":                "hyperactivity_2",
     "out_of_seat":                 "hyperactivity_2",
@@ -523,6 +587,46 @@ class _StudentTrack:
     compliance_history: list[float] = field(default_factory=list)
     identification_turn: int = 0
     observation_count: int = 0
+    # Slice 24: suspicion-to-identification delta.
+    first_suspicion_turn: Optional[int] = None
+    suspicion_to_identification_delta: Optional[int] = None
+    # Slice 35: relapse detection. Each tuple is (detected_turn, recovered_turn).
+    # recovered_turn is None until the student recovers.
+    relapse_events: list = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Step ③ — 부주의형 중심 평가 분류 (subtype + quiet distractor groupings)
+# ---------------------------------------------------------------------------
+
+# Map each ground-truth ADHD profile_type to its underlying DSM subtype group
+# for per-subtype recall (Step ③). Comorbid variants are folded into the
+# subtype that drives their core presentation: ADHD-I variants → inattentive,
+# ADHD-HI/ODD → hyperactive, combined/ODD → combined.
+_PROFILE_TO_ADHD_SUBTYPE: dict[str, str] = {
+    "adhd_inattentive": "inattentive",
+    "adhd_i_plus_anxiety": "inattentive",
+    "adhd_i_plus_ld": "inattentive",
+    "adhd_plus_depression": "inattentive",
+    "adhd_hyperactive_impulsive": "hyperactive",
+    "adhd_h_plus_odd": "hyperactive",
+    "adhd_combined": "combined",
+    "adhd_c_plus_odd": "combined",
+}
+
+# Quiet (non-ADHD) distractor profiles — the look-alikes the inattentive
+# subtype must be told apart from (anxiety / depression / LD / gifted / sleep
+# deprived). Used for Step ③ non-confusion precision. ODD is excluded: it is
+# the loud / easy contrast, not a quiet distractor.
+_QUIET_DISTRACTOR_PROFILES: frozenset[str] = frozenset({
+    "anxiety",
+    "anxiety_plus_depression",
+    "depression",
+    "learning_disorder",
+    "gifted",
+    "sleep_deprived",
+    "asd_like",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -691,35 +795,56 @@ class OrchestratorV2:
         feedback_delay_turns: int = 1,
         teacher_noise_config: TeacherNoiseConfig | None = None,
         retrieval_noise_config: RetrievalNoiseConfig | None = None,
+        prompt_style: str = "default",
+        memory: TeacherMemory | None = None,
+        student_llm: Any = None,
+        adhd_prevalence: float | tuple[float, float] | None = None,
     ):
         self.log = InteractionLog()
-        self.classroom = ClassroomV2(
+        # v19 Fix 4: pass adhd_prevalence override to ClassroomV2 when
+        # provided. None preserves the default Korean 6-11% range.
+        _cls_kwargs = dict(
             n_students=n_students, seed=seed, interaction_log=self.log,
         )
-        # Phase 6 slice 10: retrieval noise config is threaded
-        # through the TeacherMemory constructor so callers can
-        # enable imperfect recall without mutating the memory
-        # object post-construction. When None is supplied, the
-        # TeacherMemory default (no-op) stays in place and
-        # legacy ``retrieval_noise`` scalar behavior is
-        # preserved unchanged.
-        self.memory = TeacherMemory(
-            retrieval_noise=0.20,
-            principle_promotion_threshold=7,
-            principle_min_classes=3,
-            memory_decay_rate=0.99,
-            seed=seed,
-            retrieval_noise_config=retrieval_noise_config,
-        )
+        if adhd_prevalence is not None:
+            _cls_kwargs["adhd_prevalence"] = adhd_prevalence
+        self.classroom = ClassroomV2(**_cls_kwargs)
+        # Slice 35: accept a pre-built TeacherMemory so loaded
+        # persistent state is wired before TeacherLLM construction.
+        # When None, create a fresh memory as before.
+        if memory is not None:
+            self.memory = memory
+        else:
+            # Phase 6 slice 10: retrieval noise config is threaded
+            # through the TeacherMemory constructor so callers can
+            # enable imperfect recall without mutating the memory
+            # object post-construction. When None is supplied, the
+            # TeacherMemory default (no-op) stays in place and
+            # legacy ``retrieval_noise`` scalar behavior is
+            # preserved unchanged.
+            _decay = os.environ.get("OMC_MEMORY_DECAY")
+            self.memory = TeacherMemory(
+                retrieval_noise=0.20,
+                principle_promotion_threshold=7,
+                principle_min_classes=3,
+                memory_decay_rate=float(_decay) if _decay else 0.99,
+                seed=seed,
+                retrieval_noise_config=retrieval_noise_config,
+            )
         self.evaluator = IdentificationEvaluator()
         self.growth = GrowthTracker()
         self.phase_config = phase_config or PhaseConfig()
         self.teacher_llm: Any = None
         if llm_backend and TeacherLLM is not None:
-            self.teacher_llm = TeacherLLM(llm_backend, self.memory)
+            self.teacher_llm = TeacherLLM(
+                llm_backend, self.memory,
+                prompt_style=prompt_style,
+            )
         self.class_count = 0
         self.max_classes = max_classes
-        self.feedback_rate = feedback_rate
+        # v12: env-gated feedback_rate for case base label coverage
+        _fr_env = os.environ.get("OMC_FEEDBACK_RATE")
+        self.feedback_rate = float(_fr_env) if _fr_env else feedback_rate
         self._rng = random.Random(seed)
         # Stored for deterministic derivation of auxiliary RNGs
         # (e.g. the Phase 6 slice 5 teacher noise RNG) without
@@ -744,6 +869,24 @@ class OrchestratorV2:
         noise_seed = (seed if seed is not None else 0) ^ 0x6F15E6
         self._teacher_noise_rng: random.Random = random.Random(noise_seed)
 
+        # Step ② (부주의형 재설계, redesign.md): teaching-method selection RNG.
+        # The teaching mode governs the probability that low-salience inattentive
+        # behaviors surface to the teacher (classroom_env_v2._visible_behaviors).
+        # This is the concrete mechanism that separates the two arms:
+        #   * baseline (rule-based, teacher_llm is None) ALWAYS lectures — the
+        #     quiet student stays invisible, approximating a one-shot ADHD-RS
+        #     snapshot (disruption-gated noticing only).
+        #   * agent (teacher_llm is not None) ACTIVELY rotates exposing methods
+        #     (nomination / seatwork_patrol / homework_collect) once it leaves the
+        #     pure-observation phase, so the inattentive channel gets incidental
+        #     chances to surface. Discovery stays probabilistic ("놓치기 쉬움")
+        #     because the agent still occasionally lectures and each behavior is
+        #     gated by the per-mode probability downstream.
+        # A dedicated RNG (derived from the master seed) keeps mode selection
+        # reproducible without perturbing the simulator's other RNG streams.
+        mode_seed = (seed if seed is not None else 0) ^ 0x5CA1E2
+        self._mode_rng: random.Random = random.Random(mode_seed)
+
         # Phase 6 slice 3: delayed feedback for memory commits.
         # Observations are staged each turn and committed to teacher
         # memory `feedback_delay_turns` turns later, through the
@@ -764,16 +907,173 @@ class OrchestratorV2:
         self.hypothesis_board: TeacherHypothesisBoard = TeacherHypothesisBoard()
         self._current_teacher_obs: TeacherObservationBatch | None = None
 
+        # v17: optional StudentLLM for per-turn narrative + inner_thought
+        # generation. When None, students stay rule-based (v16 behavior).
+        self.student_llm = student_llm
+        # Thread pool for concurrent student LLM calls (one per turn).
+        # Only built lazily on first turn when student_llm is set.
+        self._student_executor: Any = None
+        # Per-turn narrative dict, reset each turn.
+        self._stream_narratives: dict[str, str] = {}
+        # Last teacher action (action_type) seen by students, used as
+        # part of StudentContext.teacher_action for the *next* student
+        # generation. Empty string on the very first turn.
+        self._last_teacher_action_type: str = ""
+        self._last_teacher_action_sid: str | None = None
+
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
 
     def run(self) -> Generator[dict, None, None]:
-        """Run open-ended simulation. Yields events per class."""
+        """Run open-ended simulation. Yields events per class.
+
+        v18 hooks (env-gated, default off):
+          * OMC_ANTI_COLLAPSE=1 — when the last 2 classes had n_identified=0
+            the next class skips the self-critic in TeacherLLM so the
+            conservative cascade can break.
+          * OMC_REFLEXION_LOOP=1 — after each class compute a verbal-reward
+            string (TP/FP/FN + suggestion) and stash it on TeacherLLM for
+            the next class's prompt.
+          * OMC_MEM_ROLLBACK=1 — keep memory snapshots after each class
+            and restore the best-F1 snapshot when 3 consecutive classes
+            dip 0.15+ below the recent best mean.
+        """
+        import os as _os
+        import json as _json
+        _anti_collapse = _os.environ.get("OMC_ANTI_COLLAPSE") == "1"
+        _reflexion = _os.environ.get("OMC_REFLEXION_LOOP") == "1"
+        _rollback = _os.environ.get("OMC_MEM_ROLLBACK") == "1"
+        _snap_dir = _os.environ.get("OMC_SNAPSHOT_DIR", "")
+        # Rolling state for the three hooks
+        _last_n_ident: list[int] = []
+        _last_f1: list[float] = []
+        _best_snap: dict | None = None  # (f1, snapshot dict)
+        _best_f1: float = -1.0
+        # Open a reflexion log file when REFLEXION + snap_dir set
+        _refl_log_path = ""
+        if _reflexion and _snap_dir:
+            try:
+                _os.makedirs(_snap_dir, exist_ok=True)
+                _refl_log_path = _os.path.join(_snap_dir, "reflexion_log.jsonl")
+            except Exception:
+                _refl_log_path = ""
+
         while self.max_classes is None or self.class_count < self.max_classes:
+            # Fix 2 (OMC_ANTI_COLLAPSE=1): flip the critic-skip flag on
+            # TeacherLLM BEFORE the class runs.
+            if _anti_collapse and self.teacher_llm is not None:
+                _skip = (
+                    len(_last_n_ident) >= 2
+                    and _last_n_ident[-1] == 0
+                    and _last_n_ident[-2] == 0
+                )
+                try:
+                    self.teacher_llm.set_anti_collapse_skip(_skip)
+                    if _skip:
+                        print(f"[anti-collapse] class {self.class_count + 1}: "
+                              "skipping self-critic (2 zero-id classes in a row)")
+                except Exception:
+                    pass
+
             class_result = self.run_class()
             self.class_count += 1
-            self.growth.record_class(class_result["metrics"])
+            metrics = class_result["metrics"]
+            self.growth.record_class(metrics)
+
+            # Fix 5 (OMC_REFLEXION_LOOP=1): compute verbal reward and stash
+            # on TeacherLLM for the next class.
+            if _reflexion and self.teacher_llm is not None:
+                try:
+                    _tp = int(getattr(metrics, "true_positives", 0))
+                    _fp = int(getattr(metrics, "false_positives", 0))
+                    _fn = int(getattr(metrics, "false_negatives", 0))
+                    _n_adhd = int(getattr(metrics, "n_adhd", 0))
+                    _n_ident = int(getattr(metrics, "n_identified", 0))
+                    _denom = _tp + _fp + _fn
+                    _acc = (_tp / _denom) if _denom > 0 else 0.0
+                    if _fn > _fp and _fn > 0:
+                        _suggest = (
+                            "다음 클래스에서는 식별을 망설이지 마세요. "
+                            "ADHD 의심 행동 6개 누적 시 적극적으로 identify_adhd 호출."
+                        )
+                    elif _fp > _fn and _fp > 0:
+                        _suggest = (
+                            "다음 클래스에서는 confounder(불안/수면부족/일시적 스트레스) "
+                            "행동을 ADHD와 더 명확히 분리하세요."
+                        )
+                    else:
+                        _suggest = (
+                            "현재 식별 균형 양호. 누적 행동 패턴 기반 판단을 유지하세요."
+                        )
+                    _refl = (
+                        f"class {self.class_count} 결과: "
+                        f"TP={_tp}, FP={_fp}, FN={_fn}, "
+                        f"GT ADHD={_n_adhd}명 / 식별={_n_ident}명, "
+                        f"식별 정확도={_acc:.2%}. {_suggest}"
+                    )
+                    self.teacher_llm.set_reflection(_refl)
+                    if _refl_log_path:
+                        with open(_refl_log_path, "a", encoding="utf-8") as _rf:
+                            _rf.write(_json.dumps({
+                                "class_id": self.class_count,
+                                "tp": _tp, "fp": _fp, "fn": _fn,
+                                "n_adhd": _n_adhd, "n_identified": _n_ident,
+                                "reflection": _refl,
+                            }, ensure_ascii=False) + "\n")
+                except Exception as _re:
+                    print(f"[reflexion] failed: {_re}")
+
+            # Fix 7 (OMC_MEM_ROLLBACK=1): track best F1 snapshot and
+            # restore when 3 consecutive classes dip 0.15+ below recent best.
+            if _rollback and self.memory is not None:
+                try:
+                    _f1 = 0.0
+                    _tp = int(getattr(metrics, "true_positives", 0))
+                    _fp = int(getattr(metrics, "false_positives", 0))
+                    _fn = int(getattr(metrics, "false_negatives", 0))
+                    _prec = _tp / (_tp + _fp) if (_tp + _fp) > 0 else 0.0
+                    _rec = _tp / (_tp + _fn) if (_tp + _fn) > 0 else 0.0
+                    if _prec + _rec > 0:
+                        _f1 = 2 * _prec * _rec / (_prec + _rec)
+                    _last_f1.append(_f1)
+                    if _f1 > _best_f1:
+                        _best_f1 = _f1
+                        # snapshot via to_dict so we avoid dependency on save path
+                        try:
+                            _best_snap = self.memory.to_dict()
+                            print(f"[rollback] new best F1={_f1:.3f} at class {self.class_count}")
+                        except Exception:
+                            _best_snap = None
+                    if (
+                        len(_last_f1) >= 3
+                        and _best_snap is not None
+                        and _best_f1 > 0.0
+                    ):
+                        _recent_mean = sum(_last_f1[-3:]) / 3.0
+                        if _best_f1 - _recent_mean >= 0.15:
+                            try:
+                                self.memory.load_dict(_best_snap)
+                                print(
+                                    f"[rollback] restored best snapshot "
+                                    f"(best F1={_best_f1:.3f}, "
+                                    f"recent3 mean={_recent_mean:.3f}) "
+                                    f"at class {self.class_count}"
+                                )
+                                # Reset the dip window so we do not rollback
+                                # repeatedly on the same dip.
+                                _last_f1 = []
+                            except Exception as _le:
+                                print(f"[rollback] load_dict failed: {_le}")
+                except Exception as _re:
+                    print(f"[rollback] tracking failed: {_re}")
+
+            # Update anti-collapse window AFTER class
+            if _anti_collapse:
+                _last_n_ident.append(int(getattr(metrics, "n_identified", 0)))
+                if len(_last_n_ident) > 4:
+                    _last_n_ident = _last_n_ident[-4:]
+
             yield {
                 "type": "class_complete",
                 "class_id": self.class_count,
@@ -863,6 +1163,11 @@ class OrchestratorV2:
         self._stream_intervention_outcomes: list[dict] = []
         self._stream_first_suspicion_turns: dict[str, int] = {}
 
+        # v17: reset per-class narrative dict + last teacher action.
+        self._stream_narratives = {}
+        self._last_teacher_action_type = ""
+        self._last_teacher_action_sid = None
+
         # Phase 6 slice 1: explicit teacher-facing partial observation
         # and per-student working hypothesis state. Built alongside the
         # existing decision path; future passes (hypothesis testing,
@@ -894,8 +1199,9 @@ class OrchestratorV2:
             self.memory.advance_turn()
             self._stream_final_turn = turn
 
-            # Teacher daily recovery (at start of each day, period 1)
-            if turn % 5 == 1:
+            # Teacher daily recovery (at start of each day, period 1).
+            # 부주의형 재설계: frozen when emotion is disabled (constant baseline).
+            if turn % 5 == 1 and not _emotion_disabled():
                 self.teacher_emotions.daily_recovery()
 
             # 0. Phase 6 slice 3: drain the delayed-feedback queue
@@ -1003,6 +1309,20 @@ class OrchestratorV2:
             # 2. Execute in environment
             self._stream_obs, reward, done, info = self.classroom.step(action)
 
+            # 2a. v17: generate per-student narrative + inner_thought via
+            # StudentLLM if configured. These are stored in
+            # self._stream_narratives keyed by student_id and consumed by
+            # the next-turn teacher decision path. ThreadPoolExecutor calls
+            # the OpenAI-compatible HTTP backend concurrently — the backend
+            # is stateless per call (just urllib + ResponseCache file I/O),
+            # so concurrent reads/writes are safe.
+            if self.student_llm is not None:
+                self._generate_student_narratives(
+                    turn=turn,
+                    teacher_action=action,
+                    info=info,
+                )
+
             # 2b. Record intervention outcome (post-compliance now available).
             if (
                 pre_intervention_sid is not None
@@ -1025,6 +1345,46 @@ class OrchestratorV2:
                 pre_step_visible=pre_step_visible,
             )
 
+            # 3a. Phase 5 relapse detection (independent of teacher mode)
+            # Relapse criterion: identified student shows disruptive
+            # behavior for 2 CONSECUTIVE turns (single-turn blip ignored).
+            # Recovery: 1 quiet turn closes any open relapse event.
+            # Streak counter is tracked on _StudentTrack._disruptive_streak.
+            if (not _care_disabled()
+                    and turn > self.phase_config.care_end
+                    and self._current_teacher_obs is not None):
+                _ob_lookup = self._current_teacher_obs.by_student_id()
+                for _sid, _track in self._stream_tracks.items():
+                    if _sid not in self._stream_identified:
+                        continue
+                    # Only count relapse for students under active care (managed)
+                    _student = self.classroom.get_student(_sid)
+                    if _student is None or not getattr(_student, "managed", False):
+                        continue
+                    _so = _ob_lookup.get(_sid)
+                    if _so is None:
+                        continue
+                    _is_disruptive = any(
+                        b in _DISRUPTIVE_VISIBLE_BEHAVIORS
+                        for b in _so.visible_behaviors
+                    )
+                    _streak = getattr(_track, "_disruptive_streak", 0)
+                    _has_open = (
+                        _track.relapse_events
+                        and _track.relapse_events[-1][1] is None
+                    )
+                    if _is_disruptive:
+                        _streak += 1
+                        # Open new event only on 2nd consecutive disruptive turn
+                        if _streak >= 2 and not _has_open:
+                            _track.relapse_events.append((turn, None))
+                    else:
+                        _streak = 0
+                        if _has_open:
+                            _detected, _ = _track.relapse_events[-1]
+                            _track.relapse_events[-1] = (_detected, turn)
+                    _track._disruptive_streak = _streak
+
             # 3b. Synchronize the hypothesis board with the turn-end
             # suspicion / diagnosis state. This runs every turn so the
             # board reflects the *current* teacher-side hypothesis,
@@ -1037,11 +1397,25 @@ class OrchestratorV2:
             # 4. Handle identification actions
             if action.action_type == "identify_adhd" and action.student_id:
                 if action.student_id not in self._stream_identified:
+                    # v9: tag report with identification path. LLM-led
+                    # phase-free identification gets "llm_phase_free";
+                    # rule-based or LLM-fallback identifications get
+                    # "phase3" so analysis can separate them.
+                    _llm_active = (
+                        self.teacher_llm is not None
+                        and not getattr(self, "_last_action_was_llm_fallback", False)
+                    )
+                    _id_path = "llm_phase_free" if _llm_active else "phase3"
                     report = self._build_report(
                         student_id=action.student_id,
                         turn=turn,
                         tracks=self._stream_tracks,
                         action=action,
+                        is_early_identification=False,
+                        identification_path=_id_path,
+                        first_suspicion_turn=self._stream_first_suspicion_turns.get(
+                            action.student_id
+                        ),
                     )
                     if report:
                         self._stream_reports.append(report)
@@ -1052,6 +1426,33 @@ class OrchestratorV2:
                         if student:
                             student.identified = True
                             self.classroom.identified_adhd_ids.add(action.student_id)
+                        # STaR (Zelikman et al. 2022): persist teacher's
+                        # decision-time reasoning onto recent case-base
+                        # records so retrieval can surface reasoning
+                        # patterns, not just labels.
+                        try:
+                            if self.memory is not None and action.reasoning:
+                                self.memory.tag_record_reasoning(
+                                    action.student_id, action.reasoning
+                                )
+                        except Exception:
+                            pass
+
+            # 4b. Handle reflect actions: LLM emits a self-reflective principle
+            # that gets pushed directly into the Experience Base (bypassing
+            # the cross-class promotion gate because the LLM is providing
+            # its own reasoning rather than accumulating quantitative evidence).
+            if action.action_type == "reflect" and action.reasoning:
+                principle_text = action.reasoning.strip()
+                if principle_text:
+                    try:
+                        self.memory.experience_base.add_principle(
+                            text=principle_text,
+                            evidence_case_ids=[],
+                            is_corrective=False,
+                        )
+                    except Exception:
+                        pass  # never let principle add crash the loop
 
             # 5. Track strategies
             if action.strategy:
@@ -1087,9 +1488,12 @@ class OrchestratorV2:
             # observable-only ``visible_behaviors`` set the
             # climate uses, so the two emotion inputs are
             # consistent observations of one perception event.
-            self.teacher_emotions.update_after_turn(
-                teacher_batch.climate, teacher_batch.incident_load
-            )
+            # 부주의형 재설계: when emotion is disabled, the 7-dim state stays
+            # frozen at its literature baseline (no per-turn update).
+            if not _emotion_disabled():
+                self.teacher_emotions.update_after_turn(
+                    teacher_batch.climate, teacher_batch.incident_load
+                )
 
             # 7c. Sample teacher patience (post-update) for calibration metrics
             self._stream_patience_log.append(float(self.teacher_emotions.patience))
@@ -1179,11 +1583,80 @@ class OrchestratorV2:
         """
         if teacher_batch is None:
             teacher_batch = build_observations_from_classroom(obs)
+        # Store current turn so _parse_llm_response can apply the phase gate.
+        self._stream_turn = turn
         if self.teacher_llm:
-            return self._decide_action_llm(obs, turn, teacher_batch=teacher_batch)
-        return self._decide_action_rule_based(
-            obs, turn, identified, suspicious,
-            teacher_batch=teacher_batch,
+            action = self._decide_action_llm(obs, turn, teacher_batch=teacher_batch)
+        else:
+            action = self._decide_action_rule_based(
+                obs, turn, identified, suspicious,
+                teacher_batch=teacher_batch,
+            )
+        # OMC_RULE_CARE=1: 식별은 LLM 자율, 케어 '실행'만 보조. care phase 이후
+        # 식별된 ADHD(identified_as_adhd)가 observe/passive로 방치되면
+        # private_correction(compliance↑)을 자동 배정해 성장을 유도한다.
+        # (LLM이 케어 대상을 진짜 ADHD로 못 맞추는 한계 보완 — 식별+케어 하이브리드)
+        if (not _care_disabled()
+                and __import__("os").environ.get("OMC_RULE_CARE") == "1"
+                and turn > self.phase_config.identification_end
+                and action.action_type in ("observe", "passive_observation")
+                and action.student_id and self.memory is not None):
+            _p = self.memory.get_profile(action.student_id)
+            if _p is not None and getattr(_p, "identified_as_adhd", False):
+                action = TeacherAction(
+                    action_type="private_correction",
+                    student_id=action.student_id,
+                    strategy=None,
+                    reasoning="[rule auto-care] 식별 ADHD 방치 방지: private_correction 자동배정",
+                )
+        # Step ② (부주의형 재설계): stamp the teaching method on the action so the
+        # environment gates inattentive-behavior surfacing by arm. The LLM/rule
+        # paths do not set ``teaching_mode`` themselves; this is the single
+        # chokepoint that differentiates the snapshot baseline from the active
+        # noticing agent. Only set when unset so an explicit upstream choice
+        # (future LLM tool-call) is respected.
+        if getattr(action, "teaching_mode", None) not in _TEACHING_MODES:
+            action.teaching_mode = self._select_teaching_mode(turn)
+        return action
+
+    def _select_teaching_mode(self, turn: int) -> str:
+        """Step ② — choose this turn's teaching method, differentiated by arm.
+
+        baseline arm (``self.teacher_llm is None``): ALWAYS ``"lecture"``. A
+        lecturing teacher never incidentally exposes the quiet/inattentive
+        student (lecture surfacing probability ~0.10 downstream), so the
+        baseline approximates a one-shot ADHD-RS checklist driven only by
+        disruption-gated noticing. This is the structural gap the agent fills.
+
+        agent arm (``self.teacher_llm is not None``): during the pure-observation
+        phase the agent also mostly lectures (a teacher settling into the class),
+        but once screening begins it ACTIVELY rotates the exposing methods
+        (nomination / seatwork_patrol / homework_collect) so the low-salience
+        inattentive channel gets repeated incidental chances to surface across
+        950 turns. The agent still lectures part of the time, so discovery stays
+        probabilistic rather than guaranteed ("놓치기 쉬움" preserved). The split
+        is overridable via ``OMC_AGENT_NOTICE_P`` (probability the agent picks an
+        exposing method rather than lecturing on an eligible turn).
+        """
+        # Baseline: lecture-locked snapshot.
+        if self.teacher_llm is None:
+            return "lecture"
+        # Agent: lecture during pure observation, then active noticing.
+        if turn <= self.phase_config.observation_end:
+            return "lecture"
+        try:
+            notice_p = float(os.environ.get("OMC_AGENT_NOTICE_P", "0.75"))
+        except ValueError:
+            notice_p = 0.75
+        notice_p = max(0.0, min(1.0, notice_p))
+        if self._mode_rng.random() >= notice_p:
+            return "lecture"
+        # Rotate among the exposing methods. nomination / seatwork_patrol catch
+        # real-time inattention (멍때림/딴짓); homework_collect catches the
+        # work-product channel (결과물 "맨날 반만 함"). Sampling keeps which
+        # quiet student is exposed on a given turn incidental.
+        return self._mode_rng.choice(
+            ("nomination", "seatwork_patrol", "homework_collect")
         )
 
     def _sync_hypothesis_board(self, turn: int) -> None:
@@ -1244,7 +1717,7 @@ class OrchestratorV2:
         Phase 2 (observation_end+1..screening_end): Screening
             Focus on students with suspicious patterns. Build suspicion list.
         Phase 3 (screening_end+1..identification_end): Identification
-            Formally identify students with confidence >= 0.85.
+            Formally identify students with confidence >= 0.90.
         Phase 4 (identification_end+1..care_end): Care
             Apply interventions to identified students.
         Phase 5 (care_end+1..950): Maintenance + Relapse
@@ -1255,10 +1728,13 @@ class OrchestratorV2:
         n = len(students)
 
         # Teacher emotional state affects identification thresholds.
-        # Burned-out teachers flag students more aggressively (lower threshold)
-        # and prefer firm_boundary over empathic strategies.
+        # Burned-out teachers flag students more aggressively (lower threshold).
+        # 부주의형 재설계 (redesign.md §2): the burnout→threshold COUPLING is
+        # removed when emotion is disabled so it does not perturb the headline
+        # recall/precision metrics. The code is kept (ablatable) for a future
+        # "번아웃×식별" arm; only the coupling is gated off.
         _id_threshold_modifier = 1.0
-        if self.teacher_emotions.is_burned_out():
+        if not _emotion_disabled() and self.teacher_emotions.is_burned_out():
             _id_threshold_modifier = 0.8  # lower threshold = more aggressive
 
         # Phase 6 slice 1: build a per-student lookup of teacher-visible
@@ -1306,15 +1782,44 @@ class OrchestratorV2:
                             case_adhd_rate = sum(
                                 1 for _, rec in labeled_records if rec.was_adhd
                             ) / len(labeled_records)
-                            score = base_score * 0.6 + case_adhd_rate * 0.4
+                            # case_adhd_rate 비중(OMC_CASE_PRIOR_WEIGHT). 라벨은
+                            # ground truth라 정확하지만, distractor와 ADHD가 같은
+                            # 행동을 공유해 유사케이스 검색 시 rate가 모호해진다.
+                            # 누적 오염(초반/FP case)의 영향을 줄이려 case 비중을
+                            # 약간 낮출 수 있게 env화(기본 0.4 유지, s42 실험=0.3).
+                            _cw = float(os.environ.get("OMC_CASE_PRIOR_WEIGHT", "0.4"))
+                            score = base_score * (1.0 - _cw) + case_adhd_rate * _cw
 
-                    # Experience-base principles adjust score
-                    for p in self.memory.experience_base.top_principles(top_k=5):
-                        if self.memory._principle_applies(p.text, dominant):
-                            if p.is_corrective:
-                                score *= 0.8
-                            else:
-                                score *= 1.2
+                    # Experience-base principles adjust score.
+                    # 사용자 통찰: corrective(FP억제) principle이 다수 학습돼도
+                    # top_k=5 컷오프로 대부분 무시됐다(예: 87개 중 2개만 적용).
+                    # OMC_PRINCIPLE_TOPK 설정 시: top_k 확대 + corrective/reinforce를
+                    # 각각 '하나라도 매칭되면 1회'만 곱해(누적 곱 폭증/over-suppress
+                    # 방지) 검증된 억제 규칙을 제대로 반영한다. env 없으면 기존 동작
+                    # 유지(s44 원본 비교군 불변).
+                    if os.environ.get("OMC_PRINCIPLE_TOPK"):
+                        _topk = int(os.environ.get("OMC_PRINCIPLE_TOPK", "5"))
+                        _corr_w = float(os.environ.get("OMC_PRINCIPLE_CORRECTIVE", "0.8"))
+                        _reinf_w = float(os.environ.get("OMC_PRINCIPLE_REINFORCE", "1.2"))
+                        _corr_hit = False
+                        _reinf_hit = False
+                        for p in self.memory.experience_base.top_principles(top_k=_topk):
+                            if self.memory._principle_applies(p.text, dominant):
+                                if p.is_corrective:
+                                    _corr_hit = True
+                                else:
+                                    _reinf_hit = True
+                        if _reinf_hit:
+                            score *= _reinf_w
+                        if _corr_hit:
+                            score *= _corr_w
+                    else:
+                        for p in self.memory.experience_base.top_principles(top_k=5):
+                            if self.memory._principle_applies(p.text, dominant):
+                                if p.is_corrective:
+                                    score *= 0.8
+                                else:
+                                    score *= 1.2
 
                     score = min(1.0, score)
 
@@ -1413,20 +1918,7 @@ class OrchestratorV2:
                         reasoning=f"Phase 3 (completing 2c): hypothesis test '{strategy}' for {sid}",
                     )
 
-            # --- Memory-informed identification threshold ---
-            # A teacher with more case-base experience (labeled records from
-            # prior classes) needs less hypothesis evidence to be confident.
-            # This is the KEY mechanism where memory improves over classes.
-            n_labeled = sum(
-                1 for rec in self.memory.case_base._records
-                if rec.was_adhd is not None
-            )
-            # experience_boost: ramps from 0.0 (no prior labels) to 0.20
-            # (500+ labeled records = ~2-3 prior classes with feedback)
-            experience_boost = min(0.20, n_labeled / 2500.0)
-            # With experience, identification threshold drops from 0.40 to 0.20
-            id_threshold = max(0.20, 0.40 - experience_boost)
-
+            # --- Phase 3: identification threshold fixed at 0.90 ---
             # Try to identify high-confidence students
             candidate = self._most_suspicious_student(identified)
             if candidate:
@@ -1444,17 +1936,9 @@ class OrchestratorV2:
                             is_adhd, confidence, reasoning = self.memory.identify_adhd(
                                 candidate.student_id
                             )
-                            # Hypothesis test completion boosts confidence:
-                            # passing 3 differential tests is strong evidence
-                            if likely.startswith("adhd"):
-                                confidence = min(1.0, confidence + 0.35)
-                            # Memory-informed threshold: experienced teacher
-                            # can identify with less confidence
-                            if confidence >= id_threshold:
+                            if confidence >= _omc_conf_threshold():
                                 hypo_info = (
-                                    f" [hypothesis={likely}, "
-                                    f"threshold={id_threshold:.2f}, "
-                                    f"experience_boost={experience_boost:.3f}]"
+                                    f" [hypothesis={likely}]"
                                 )
                                 return TeacherAction(
                                     action_type="identify_adhd",
@@ -1484,7 +1968,7 @@ class OrchestratorV2:
                         is_adhd, confidence, reasoning = self.memory.identify_adhd(
                             candidate.student_id
                         )
-                        if confidence >= 0.85:
+                        if confidence >= _omc_conf_threshold():
                             return TeacherAction(
                                 action_type="identify_adhd",
                                 student_id=candidate.student_id,
@@ -1509,6 +1993,41 @@ class OrchestratorV2:
             return TeacherAction(
                 action_type="class_instruction",
                 reasoning="Phase 3: no candidates, general instruction",
+            )
+
+        # 부주의형 재설계 (redesign.md §2): when the care arm is disabled the
+        # rule teacher never enters Phase 4 (care) / Phase 5 (maintenance).
+        # The deliverable is narrowed to detection — past the identification
+        # window the teacher keeps doing a final identification sweep and
+        # otherwise gives general instruction, with NO care interventions and
+        # NO via-care student growth. The differential-diagnosis probe lives in
+        # Phase 2 and is untouched. (Normally redundant because the run script
+        # packs identification_end up to max_turns, but kept as a robust guard
+        # for any care-disabled run that does not repack the phases.)
+        if _care_disabled():
+            candidate = self._most_suspicious_student(identified)
+            if candidate:
+                profile = self.memory.get_profile(candidate.student_id)
+                score = profile.adhd_indicator_score()
+                n_obs = sum(profile.behavior_frequency_counts.values())
+                if score >= (0.20 * _id_threshold_modifier) and n_obs >= 5:
+                    is_adhd, confidence, reasoning = self.memory.identify_adhd(
+                        candidate.student_id
+                    )
+                    if confidence >= _omc_conf_threshold():
+                        return TeacherAction(
+                            action_type="identify_adhd",
+                            student_id=candidate.student_id,
+                            reasoning=reasoning,
+                        )
+                return TeacherAction(
+                    action_type="observe",
+                    student_id=candidate.student_id,
+                    reasoning=f"[care-disabled] detection sweep (score={score:.2f}, obs={n_obs})",
+                )
+            return TeacherAction(
+                action_type="class_instruction",
+                reasoning="[care-disabled] detection complete, general instruction",
             )
 
         # ---- Phase 4: Care (turns identification_end+1..care_end) ----
@@ -1546,7 +2065,7 @@ class OrchestratorV2:
                     is_adhd, confidence, reasoning = self.memory.identify_adhd(
                         candidate.student_id
                     )
-                    if confidence >= 0.75:
+                    if confidence >= _omc_conf_threshold():
                         return TeacherAction(
                             action_type="identify_adhd",
                             student_id=candidate.student_id,
@@ -1606,7 +2125,7 @@ class OrchestratorV2:
                 is_adhd, confidence, reasoning = self.memory.identify_adhd(
                     candidate.student_id
                 )
-                if confidence >= (0.70 * _id_threshold_modifier):
+                if confidence >= _omc_conf_threshold():
                     return TeacherAction(
                         action_type="identify_adhd",
                         student_id=candidate.student_id,
@@ -1617,6 +2136,128 @@ class OrchestratorV2:
             action_type="class_instruction",
             reasoning="Phase 5: maintenance, general instruction",
         )
+
+    # ------------------------------------------------------------------
+    # v17: student narrative generation
+    # ------------------------------------------------------------------
+
+    def _generate_student_narratives(
+        self,
+        *,
+        turn: int,
+        teacher_action: TeacherAction,
+        info: dict,
+    ) -> None:
+        """Generate narrative + inner_thought for every student this turn.
+
+        Uses ThreadPoolExecutor for concurrent OpenAI-compatible HTTP calls.
+        Results stored in self._stream_narratives[student_id]. Cache hits
+        bypass the network round-trip entirely (StudentLLM uses
+        ResponseCache keyed by sha256(student_state + context)), so the
+        amortized cost is roughly one wall-clock LLM call per turn for
+        first-time states and zero for repeats.
+
+        Failure mode: any exception per student → narrative left as the
+        previous turn's value (or empty if none). Never crashes the loop.
+        """
+        # Lazy-init the executor on first call. n_students caps parallelism
+        # so we never spawn more workers than students.
+        if self._student_executor is None:
+            from concurrent.futures import ThreadPoolExecutor
+            n_workers = max(1, len(self.classroom.students))
+            import os as _os
+            _env_workers = _os.environ.get('OMC_STUDENT_CONCURRENCY')
+            if _env_workers:
+                try:
+                    n_workers = max(1, min(n_workers, int(_env_workers)))
+                except ValueError:
+                    pass
+            self._student_executor = ThreadPoolExecutor(
+                max_workers=n_workers,
+                thread_name_prefix="student_llm",
+            )
+
+        # Local import to avoid hard dependency at module load.
+        from src.llm.student_llm import StudentContext
+
+        # Build scenario string from environment info (subject + location)
+        subject = info.get("subject", "unknown") if isinstance(info, dict) else "unknown"
+        location = info.get("location", "classroom") if isinstance(info, dict) else "classroom"
+        scenario = f"{subject} 수업 ({location})"
+
+        # Build teacher action description visible to students.
+        ta_type = getattr(teacher_action, "action_type", "") or ""
+        ta_sid = getattr(teacher_action, "student_id", None)
+        ta_strategy = getattr(teacher_action, "strategy", None)
+        if ta_type == "class_instruction":
+            ta_desc = "교사가 전체 학급을 지도함"
+        elif ta_type == "observe":
+            ta_desc = f"교사가 {ta_sid} 학생을 집중 관찰함" if ta_sid else "교사가 관찰함"
+        elif ta_type == "individual_intervention":
+            ta_desc = f"교사가 {ta_sid}에게 {ta_strategy} 개입을 시도함"
+        elif ta_type == "private_correction":
+            ta_desc = f"교사가 {ta_sid}을(를) 따로 불러 1:1 지도함"
+        elif ta_type == "public_correction":
+            ta_desc = f"교사가 {ta_sid}을(를) 교실 앞에서 공개적으로 지적함"
+        elif ta_type == "identify_adhd":
+            ta_desc = "교사가 무언가를 결정함"
+        else:
+            ta_desc = "교사가 별다른 행동을 하지 않음"
+
+        # Class mood derived from the current observation
+        class_mood = getattr(self._stream_obs, "class_mood", "calm")
+
+        # Build per-student contexts and submit concurrent generations.
+        futures = {}
+        for student in self.classroom.students:
+            sid = student.student_id
+            # Recent peer events: only show events involving this student
+            # (drawn from last few InteractionEvents on the log)
+            peer_events: list[str] = []
+            try:
+                hist = self.log.get_student_history(sid, self.classroom.class_id)
+                for ev in hist[-3:]:
+                    peer_events.append(str(ev.content)[:160])
+            except Exception:
+                pass
+            ctx = StudentContext(
+                scenario=scenario,
+                teacher_action=ta_desc,
+                teacher_utterance="",
+                turn=turn,
+                recent_peer_events=peer_events,
+                class_mood=class_mood,
+            )
+            futures[sid] = self._student_executor.submit(
+                self._safe_student_generate, student, ctx,
+            )
+
+        # Collect results. Per-student failures fall back to empty string.
+        for sid, fut in futures.items():
+            try:
+                resp = fut.result(timeout=180)
+                if resp is None:
+                    continue
+                narr = (resp.narrative or "").strip()
+                # Cap narrative length so prompt doesn't balloon
+                if narr:
+                    if len(narr) > 220:
+                        narr = narr[:217] + "..."
+                    self._stream_narratives[sid] = narr
+            except Exception:
+                # leave previous narrative (or absent key) untouched
+                pass
+
+    def _safe_student_generate(self, student, ctx):  # type: ignore[no-untyped-def]
+        """Wrap StudentLLM.generate_response with broad exception capture.
+
+        Returns None on any failure so the orchestrator can skip the
+        student silently rather than crashing the per-turn pool.
+        """
+        try:
+            return self.student_llm.generate_response(student, ctx)
+        except Exception:
+            return None
 
     def _decide_action_llm(
         self,
@@ -1650,17 +2291,36 @@ class OrchestratorV2:
             for observation in teacher_batch:
                 profile = self.memory.get_profile(observation.student_id)
                 score = profile.adhd_indicator_score() if profile else 0.0
-                student_lines.append(
+                line = (
                     f"  {observation.student_id}: "
                     f"behaviors={list(observation.visible_behaviors)}, "
                     f"hint={observation.profile_hint}, "
                     f"score={score:.2f}"
                 )
+                # v17: append natural-language narrative when StudentLLM has
+                # populated _stream_narratives. Empty/missing narrative falls
+                # back to v16-compatible behaviors-only line.
+                _narr = self._stream_narratives.get(observation.student_id, "") if hasattr(self, "_stream_narratives") else ""
+                if _narr:
+                    line += f" | \"{_narr}\""
+                student_lines.append(line)
 
-            # 2. Retrieve memory context for top suspicious students
+            # 2. Retrieve memory context for suspicious students (v11: OMC_CASE_BASE_ALL=1 widens to all students with profile)
             suspicious = getattr(self, "_stream_suspicious", {})
             memory_context_lines: list[str] = []
-            for sid in list(suspicious.keys())[:5]:
+            import os as _os
+            _expand_all = _os.environ.get("OMC_CASE_BASE_ALL") == "1"
+            if _expand_all:
+                # All students with profile + at least 1 dominant behavior
+                _target_sids = []
+                for _s in obs.student_summaries:
+                    _p = self.memory.get_profile(_s.student_id)
+                    if _p and _p.dominant_behaviors(top_k=1):
+                        _target_sids.append(_s.student_id)
+                _target_sids = _target_sids[:10]
+            else:
+                _target_sids = list(suspicious.keys())[:5]
+            for sid in _target_sids:
                 profile = self.memory.get_profile(sid)
                 if not profile:
                     continue
@@ -1688,33 +2348,14 @@ class OrchestratorV2:
                 else ["  (아직 없음)"]
             )
 
-            # 4. Determine current phase
-            pc = self.phase_config
-            if turn <= pc.observation_end:
-                phase = (
-                    f"Phase 1 (관찰, turn {turn}/{pc.observation_end}): "
-                    "모든 학생을 순환 관찰하세요."
-                )
-            elif turn <= pc.screening_end:
-                phase = (
-                    f"Phase 2 (스크리닝, turn {turn}/{pc.screening_end}): "
-                    "의심 학생을 집중 관찰하고 가설 테스트하세요."
-                )
-            elif turn <= pc.identification_end:
-                phase = (
-                    f"Phase 3 (판별, turn {turn}/{pc.identification_end}): "
-                    "충분한 근거가 있으면 판별하세요."
-                )
-            elif turn <= pc.care_end:
-                phase = (
-                    f"Phase 4 (케어, turn {turn}/{pc.care_end}): "
-                    "판별된 학생에게 개입하세요."
-                )
-            else:
-                phase = (
-                    f"Phase 5 (유지, turn {turn}/950): "
-                    "관리 완료 학생의 재발을 모니터하세요."
-                )
+            # 4. Phase-free mode (v9): no phase label, only turn count.
+            # LLM teacher decides observe/screen/identify/care/relapse
+            # based on observations + memory; confidence >= 0.90 gate
+            # still applies via _parse_llm_response.
+            phase = (
+                f"진행: turn {turn}/950 — 관찰한 행동과 메모리를 바탕으로 "
+                "관찰/스크리닝/판별/케어/재발 모니터 중 적절한 행동을 스스로 결정하세요."
+            )
 
             # 5. Gather identified and ruled-out sets
             identified = getattr(self, "_stream_identified", set())
@@ -1750,19 +2391,50 @@ class OrchestratorV2:
                 "sensory_support\n"
                 "4. private_correction(student_id) - 교무실 1:1 상담\n"
                 "5. public_correction(student_id) - 교실 내 공개 지적\n"
-                "6. identify_adhd(student_id, reasoning) - ADHD 판별 (근거 필수)\n"
-                "7. generate_report(student_id) - 판별 리포트 생성\n\n"
-                "하나의 행동을 선택하세요. 과거 사례와 원칙을 참고하여 판단하세요.\n"
+                "6. identify_adhd(student_id, reasoning) - ADHD 판별 (근거 필수, 리포트 자동 생성)\n"
+                "7. reflect(reasoning) - 학습된 일반 원칙을 Experience Base에 기록\n"
+                "   (예: \"산만한 학생에게는 시각 일정표가 효과적\")\n\n"
+                + (
+                    "## 행동 결정 트리 (반드시 이 순서로 판단)\n"
+                    "Step 1. score ≥ 0.85인 학생이 있는가?\n"
+                    "         → 그 학생을 이번 turn 또는 직전 5턴 내에 관찰/개입한 적 있으면: **identify_adhd(student_id) 선택**\n"
+                    "         → 아직 관찰한 적 없으면: 그 학생을 observe\n"
+                    "Step 2. 위에 해당 없고 같은 action_type 3턴 연속 반복했으면: 다른 action 선택\n"
+                    "Step 3. 매 50턴마다 reflect로 학습한 원칙을 한 줄 기록\n"
+                    "Step 4. 의심 학생(score 0.5+)에게 **다양한 개입 행동을 골고루 시도**:\n"
+                    "         - **private_correction(student_id)**: ADHD에 가장 효과적 (compliance ↑, distress ↓, O'Leary 1970)\n"
+                    "         - **individual_intervention(student_id, strategy)**: 학생 반응 관찰\n"
+                    "         - **public_correction(student_id)**: 일반적으로는 효과 적지만 비ADHD에는 OK\n"
+                    "         - private과 public을 둘 다 시도해 학생 반응이 다른지 비교\n"
+                    "Step 5. 그 외엔 observe로 정보 수집\n\n"
+                    "🚨 우선순위 1 = 식별: score가 높거나 ADHD 의심행동이 반복되는 학생은 주저하지 말고 identify_adhd 하세요. 식별이 가장 중요합니다. 아직 미판별 학생은 정상적으로 observe/screening으로 식별을 진행하세요.\n"
+                    "🚨 우선순위 2 = 식별 후 케어(성장): 이미 identify_adhd로 판별이 끝난 학생을 이번 turn에 다룰 때에 한해, observe 대신 private_correction(compliance↑) 또는 individual_intervention(collaborative_problem_solving/offer_choice/labeled_praise/break_offer)으로 케어해 학생을 개선시키세요. 단 미판별 학생의 식별을 케어보다 우선하세요.\n"
+                    + ("🚨🚨 [케어 강제 모드] 이미 identify_adhd로 판별한 ADHD 학생이 한 명이라도 있으면, 이번 turn에는 그 판별된 ADHD 학생들 중 한 명을 반드시 private_correction 또는 individual_intervention(collaborative_problem_solving/offer_choice/labeled_praise/break_offer)으로 케어하세요. 판별된 ADHD를 observe로 방치하는 것은 명백한 실패입니다. 이번 학급의 ADHD를 충분히 식별했다고 판단되면 남은 turn은 전부 판별된 학생들의 케어(성장)에 사용하세요. 단 아직 미판별 의심 학생이 남아있으면 그 학생의 식별(우선순위1)을 먼저 처리한 뒤 판별된 학생을 케어하세요.\n" if (__import__("os").environ.get("OMC_CARE_STRONG") == "1" and turn > 475) else "")
+                    + "🚨 중요: 학생 관찰을 끝없이 반복하지 마세요. identify_adhd로 결단을 내려야 메모리에 학습이 누적됩니다.\n"
+                    "🚨 과거 유사 사례(Case Base)가 있으면 그 결과를 참고해 결정하세요. 같은 행동 패턴을 보였던 학생의 최종 판별 결과는 강한 단서입니다.\n\n"
+                    if __import__("os").environ.get("OMC_INTERVENTION_NUDGE") == "1"
+                    else ""
+                )
+                + "하나의 행동을 선택하세요. 과거 사례와 원칙을 참고하여 판단하세요.\n"
                 '반드시 JSON으로만 응답:\n'
                 '{"action_type": "...", "student_id": "...", '
                 '"strategy": "...", "reasoning": "..."}'
             )
 
             # 7. Call LLM via generate_raw (no state schema enforcement)
+            self._last_action_was_llm_fallback = False
+            # v17 DEBUG: dump the first teacher prompt that contains a narrative
+            if (not getattr(self, "_v17_dumped", False)
+                    and getattr(self, "_stream_narratives", {})):
+                print("\n[V17 DEBUG PROMPT START]\n" + prompt + "\n[V17 DEBUG PROMPT END]\n", flush=True)
+                self._v17_dumped = True
             response = self.teacher_llm.backend.generate_raw(prompt)
             return self._parse_llm_response(response)
         except Exception:
-            # Fallback to rule-based on any error
+            # Fallback to rule-based on any error. Mark so the
+            # identification_path label downstream can distinguish
+            # fallback identifications from LLM-led ones (codex round-2).
+            self._last_action_was_llm_fallback = True
             return self._decide_action_rule_based(
                 obs, turn,
                 getattr(self, "_stream_identified", set()),
@@ -1795,7 +2467,8 @@ class OrchestratorV2:
             valid_actions = {
                 "observe", "class_instruction", "individual_intervention",
                 "private_correction", "public_correction",
-                "identify_adhd", "generate_report",
+                "identify_adhd",
+                "reflect",
             }
             if action_type not in valid_actions:
                 action_type = "class_instruction"
@@ -1803,8 +2476,14 @@ class OrchestratorV2:
             # Actions that need a student_id
             if action_type in {
                 "observe", "individual_intervention", "private_correction",
-                "public_correction", "identify_adhd", "generate_report",
+                "public_correction", "identify_adhd",
             } and not student_id:
+                action_type = "class_instruction"
+                student_id = None
+                strategy = None
+
+            # reflect needs a non-empty reasoning string (the principle text)
+            if action_type == "reflect" and not reasoning:
                 action_type = "class_instruction"
                 student_id = None
                 strategy = None
@@ -1820,6 +2499,32 @@ class OrchestratorV2:
             if action_type == "individual_intervention":
                 if strategy not in valid_strategies:
                     strategy = "redirect_attention"
+
+            # Phase-free mode (v9): no phase gate on identify_adhd.
+            # The LLM may emit identify_adhd at any turn; only the
+            # confidence gate (>= 0.90 in memory) blocks identification.
+            # This tests whether the v8 phase gate was suppressing the
+            # memory-driven identification signal.
+            if action_type == "identify_adhd" and student_id:
+                # v13/14: env-gated bypass of confidence gate
+                _bypass = os.environ.get("OMC_BYPASS_GATE") == "1"
+                try:
+                    _is_adhd, _conf, _rsn = self.memory.identify_adhd(student_id)
+                    if _bypass:
+                        # v14: force profile to reflect LLM's decision so record_outcome labels match
+                        try:
+                            _prof = self.memory.get_profile(student_id) or self.memory._get_or_create_profile(student_id)
+                            _prof.identified_as_adhd = True
+                            _prof.identification_confidence = max(_prof.identification_confidence, 0.90)
+                            _prof.identification_reasoning = reasoning or "LLM bypass"
+                        except Exception:
+                            pass
+                    if not _bypass and _conf < _omc_conf_threshold():
+                        action_type = "observe"
+                        strategy = None
+                except Exception:
+                    action_type = "observe"
+                    strategy = None
 
             return TeacherAction(
                 action_type=action_type,
@@ -1841,8 +2546,16 @@ class OrchestratorV2:
         self, behaviors: list[str], exclude_student_id: str,
     ) -> list[tuple[float, Any]]:
         """Retrieve similar cases with known ADHD labels, with per-turn caching."""
-        # Cache key: turn + behaviors + excluded student
-        cache_key = (self.memory._turn, tuple(sorted(behaviors)), exclude_student_id)
+        # Cache key: class + turn + behaviors + excluded student
+        # (Fix: turn alone is not unique because memory._turn resets to 0
+        # at every new class via new_class(), so class N turn 200's lookup
+        # could collide with class N+1 turn 200.)
+        cache_key = (
+            getattr(self.memory, "_current_class_id", 0),
+            self.memory._turn,
+            tuple(sorted(behaviors)),
+            exclude_student_id,
+        )
         if not hasattr(self, "_labeled_cache"):
             self._labeled_cache: dict = {}
         if cache_key in self._labeled_cache:
@@ -2414,8 +3127,21 @@ class OrchestratorV2:
         turn: int,
         tracks: dict[str, _StudentTrack],
         action: TeacherAction,
+        *,
+        is_early_identification: bool = False,
+        identification_path: Optional[str] = None,
+        first_suspicion_turn: Optional[int] = None,
     ) -> Optional[IdentificationReport]:
-        """Build and evaluate an IdentificationReport for a newly identified student."""
+        """Build and evaluate an IdentificationReport for a newly identified student.
+
+        Slice 22: ``is_early_identification`` / ``identification_path``
+        carry the structured bypass metadata down from the
+        ``stream_class`` action handler so the emitted
+        ``IdentificationReport`` and the per-student ``_StudentTrack``
+        are both labeled with the path that produced the
+        identification. Callers that do not set them preserve legacy
+        behavior (``False`` / ``None``).
+        """
         student = self.classroom.get_student(student_id)
         if student is None:
             return None
@@ -2439,6 +3165,16 @@ class OrchestratorV2:
             subtype = "combined"
 
         _, confidence, reasoning = self.memory.identify_adhd(student_id)
+        # v15: re-apply bypass override after rule-based identify_adhd overwrites profile
+        if os.environ.get("OMC_BYPASS_GATE") == "1":
+            try:
+                _prof = self.memory.get_profile(student_id)
+                if _prof is not None:
+                    _prof.identified_as_adhd = True
+                    _prof.identification_confidence = max(_prof.identification_confidence, 0.90)
+                    confidence = max(confidence, 0.90)
+            except Exception:
+                pass
 
         report = IdentificationReport(
             student_id=student_id,
@@ -2449,6 +3185,15 @@ class OrchestratorV2:
             identified_subtype=subtype,
             confidence=round(confidence, 3),
             reasoning=action.reasoning or reasoning,
+            early_identification=is_early_identification,
+            early_identification_turn=turn if is_early_identification else None,
+            identification_path=identification_path,
+            first_suspicion_turn=first_suspicion_turn,
+            suspicion_to_identification_delta=(
+                max(0, turn - first_suspicion_turn)
+                if first_suspicion_turn is not None
+                else None
+            ),
         )
 
         # Ground-truth subtype mapping
@@ -2468,7 +3213,16 @@ class OrchestratorV2:
                 ground_truth_subtype=gt_subtype,
             )
             self.evaluator.add_report(report)
-            self.memory.record_outcome(student_id, was_correct=bool(report.is_correct))
+            # Pass class_id explicitly so this label is class-scoped
+            # even if record_outcome() ever runs asynchronously.
+            self.memory.record_outcome(
+                student_id,
+                was_correct=bool(report.is_correct),
+                class_id=getattr(
+                    self.memory, "_current_class_id",
+                    self.memory._metrics.classes_seen,
+                ),
+            )
         else:
             # Unconfirmed: teacher doesn't know if they were right.
             # No outcome recorded -> Experience Base doesn't update for this case.
@@ -2478,6 +3232,17 @@ class OrchestratorV2:
 
         if track:
             track.identification_turn = turn
+            track.early_identification = is_early_identification
+            track.early_identification_turn = (
+                turn if is_early_identification else None
+            )
+            track.identification_path = identification_path
+            track.first_suspicion_turn = first_suspicion_turn
+            track.suspicion_to_identification_delta = (
+                max(0, turn - first_suspicion_turn)
+                if first_suspicion_turn is not None
+                else None
+            )
 
         return report
 
@@ -2602,6 +3367,17 @@ class OrchestratorV2:
 
         n_managed = sum(1 for s in self.classroom.students if s.is_adhd and s.managed)
 
+        # 부주의형 재설계 (redesign.md §2): when the care arm is disabled the
+        # via-care STUDENT-GROWTH indicators are turned off so they do not
+        # muddy the headline detection metrics. Detection metrics
+        # (tp/fp/fn/recall/precision, subtype recall, distractor precision)
+        # and the cross-class memory thesis are untouched — only the
+        # therapeutic-improvement signals are zeroed.
+        if _care_disabled():
+            improvement_rates = []
+            avg_care_turns = 0.0
+            n_managed = 0
+
         # Per-category breakdown for Macro-F1
         # ADHD TP/FP/FN counted from identified vs ground truth sets
         adhd_tp = tp
@@ -2609,13 +3385,76 @@ class OrchestratorV2:
         adhd_fn = fn
         # Confounder FP: normal students with confounding profiles wrongly identified
         # Actual profile_type values: anxiety, odd, gifted, sleep_deprived
-        _CONFOUNDER_PROFILES = {"anxiety", "odd", "gifted", "sleep_deprived"}
+        _CONFOUNDER_PROFILES = {
+            # Stage 3 community confounders (Korean prevalence data)
+            "anxiety", "anxiety_plus_depression",
+            "odd", "gifted", "sleep_deprived",
+            # Stage 4 differential diagnosis distractors
+            "asd_like", "depression", "learning_disorder",
+        }
         confounder_fp = 0
         for sid in (identified_students - ground_truth):
             s_obj = self.classroom.get_student(sid)
             if s_obj and hasattr(s_obj, "profile_type"):
                 if s_obj.profile_type in _CONFOUNDER_PROFILES:
                     confounder_fp += 1
+
+        # Step ③: per-subtype recall counts (headline = inattentive recall)
+        # and quiet-distractor non-confusion counts.
+        subtype_totals = {"inattentive": 0, "hyperactive": 0, "combined": 0}
+        subtype_tps = {"inattentive": 0, "hyperactive": 0, "combined": 0}
+        for s in adhd_students:
+            subtype = _PROFILE_TO_ADHD_SUBTYPE.get(
+                getattr(s, "profile_type", ""), None
+            )
+            if subtype is None:
+                continue
+            subtype_totals[subtype] += 1
+            if s.student_id in identified_students:
+                subtype_tps[subtype] += 1
+
+        quiet_distractor_total = 0
+        quiet_distractor_fp = 0
+        for s in normal_students:
+            if getattr(s, "profile_type", "") in _QUIET_DISTRACTOR_PROFILES:
+                quiet_distractor_total += 1
+                if s.student_id in identified_students:
+                    quiet_distractor_fp += 1
+
+        # Stubs for downstream compatibility (early_identification feature removed).
+        n_early = 0
+        n_phase3 = 0
+        avg_early_turn = 0.0
+        avg_phase3_turn = 0.0
+        early_rate = 0.0
+
+        # Slice 24: suspicion-to-identification delta aggregation.
+        valid_deltas = [
+            r.suspicion_to_identification_delta
+            for r in reports
+            if r.suspicion_to_identification_delta is not None
+        ]
+        avg_s2i_delta = (
+            round(sum(valid_deltas) / len(valid_deltas), 2)
+            if valid_deltas else 0.0
+        )
+
+        # Phase 5 relapse aggregation
+        _all_events = [
+            ev for tr in self._stream_tracks.values()
+            for ev in tr.relapse_events
+        ]
+        _relapse_count = len(_all_events)
+        _recovered = [ev for ev in _all_events if ev[1] is not None]
+        _relapse_recovery_count = len(_recovered)
+        _relapse_recovery_rate = (
+            _relapse_recovery_count / _relapse_count
+            if _relapse_count > 0 else 0.0
+        )
+        _durations = [ev[1] - ev[0] for ev in _recovered]
+        _avg_relapse_duration = (
+            sum(_durations) / len(_durations) if _durations else 0.0
+        )
 
         metrics = ClassMetrics(
             class_id=self.class_count + 1,
@@ -2636,6 +3475,24 @@ class OrchestratorV2:
             adhd_fp=adhd_fp,
             adhd_fn=adhd_fn,
             confounder_fp=confounder_fp,
+            n_early_identifications=n_early,
+            avg_early_identification_turn=avg_early_turn,
+            early_identification_rate=early_rate,
+            n_phase3_identifications=n_phase3,
+            avg_phase3_identification_turn=avg_phase3_turn,
+            avg_suspicion_to_identification_delta=avg_s2i_delta,
+            relapse_count=_relapse_count,
+            relapse_recovery_count=_relapse_recovery_count,
+            relapse_recovery_rate=round(_relapse_recovery_rate, 4),
+            avg_relapse_duration=round(_avg_relapse_duration, 2),
+            inattentive_tp=subtype_tps["inattentive"],
+            inattentive_total=subtype_totals["inattentive"],
+            hyperactive_tp=subtype_tps["hyperactive"],
+            hyperactive_total=subtype_totals["hyperactive"],
+            combined_tp=subtype_tps["combined"],
+            combined_total=subtype_totals["combined"],
+            quiet_distractor_total=quiet_distractor_total,
+            quiet_distractor_fp=quiet_distractor_fp,
         )
 
         return {

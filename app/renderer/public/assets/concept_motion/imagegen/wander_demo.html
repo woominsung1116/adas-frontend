@@ -1,0 +1,1368 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Concept Motion Wander Demo</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f172a;
+      --panel: rgba(15, 23, 42, 0.86);
+      --line: #334155;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    label {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    input[type="range"] {
+      width: 112px;
+      accent-color: var(--accent);
+    }
+
+    button {
+      height: 32px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #111827;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: var(--accent);
+    }
+
+    .stage {
+      position: relative;
+      min-height: 0;
+      background: #111827;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      image-rendering: pixelated;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <h1>Backend-free Classroom Motion Demo</h1>
+        <div class="hint">Characters wander, talk, fidget, and raise hands using the generated motion sheets.</div>
+      </div>
+      <div class="controls">
+        <label>
+          Students
+          <input id="crowd" type="range" min="4" max="20" value="20" />
+        </label>
+        <label>
+          Speed
+          <input id="speed" type="range" min="0.5" max="2.2" value="1" step="0.1" />
+        </label>
+        <button id="event" type="button">Trigger Action</button>
+        <button id="toggle" type="button">Pause</button>
+      </div>
+    </header>
+    <div class="stage">
+      <canvas id="canvas" width="960" height="640"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const FRAME_W = 192;
+    const FRAME_H = 192;
+    const DOOR_FRAME_W = 256;
+    const DOOR_FRAME_H = 192;
+    const WORLD_W = 960;
+    const WORLD_H = 640;
+    const SPRITE_SIZE = 72;
+    const SEATED_SPRITE_SIZE = 64;
+    const SEATED_DIRECTION_SIZE = 70;
+    const DESK_RENDER_W = 74;
+    const DESK_RENDER_H = 54;
+    const DESK_W = 62;
+    const DESK_TOP_H = 18;
+    const DESK_FRONT_H = 10;
+    const SEAT_OFFSET_Y = 42;
+    const STUDENT_COUNT = 20;
+    const STUDENT_CHARACTER_IDS = [
+      "concept_01_boy_uniform",
+      "concept_02_girl_sailor",
+      "concept_03_boy_blazer",
+      "concept_04_girl_blonde",
+      "concept_10_girl_glasses",
+      "concept_11_sash_student",
+      "concept_12_pe_student",
+    ];
+    const TEACHER_CHARACTER_ID = "concept_05_teacher";
+    const CHARACTER_SCALE = {
+      concept_04_girl_blonde: 0.98,
+      concept_05_teacher: 1,
+      concept_10_girl_glasses: 1.14,
+      concept_11_sash_student: 1.18,
+      concept_12_pe_student: 1.22,
+      default: 1,
+    };
+    const WALK_SCALE = {
+      concept_01_boy_uniform: 1.18,
+      concept_02_girl_sailor: 1.18,
+      concept_03_boy_blazer: 1.12,
+      concept_04_girl_blonde: 1.15,
+      concept_05_teacher: 1.13,
+      concept_10_girl_glasses: 1.1,
+      concept_11_sash_student: 1.08,
+      concept_12_pe_student: 1.05,
+      default: 1.12,
+    };
+    const STRUCTURE_ASSETS = {
+      studentDesk: "objects/student_desk.png",
+      teacherDesk: "objects/teacher_desk.png",
+      studentChair: "objects/student_chair.png",
+    };
+    const BACKGROUND_ASSET = "school_background_imagegen.png";
+    const MOTION_FRAMES = {
+      idle: [0],
+      walk: [1, 2],
+      talk: [0, 3, 0, 3],
+      fidget: [0, 4, 0, 4],
+      raise: [0, 5, 5, 0],
+    };
+    const ACTIONS = ["talk", "fidget", "raise"];
+    // East and west use the SAME source frame (the left-facing one);
+    // east is rendered with a horizontal flip in drawAgent.
+    // This avoids the inconsistent direction inside artist-drawn east frames.
+    const DIRECTION_FRAME = {
+      south: 0,
+      west: 2,
+      east: 2,
+      north: 3,
+    };
+    const DIRECTION_WALK_FRAME = {
+      south: 0,
+      west: 4,
+      east: 4,
+      north: 6,
+    };
+    const SEATED_FRAME = {
+      front: 0,
+      back: 1,
+      raise: 2,
+      fidget: 3,
+    };
+    const AREAS = {
+      classroom: { x: 18, y: 92, w: 624, h: 270 },
+      office: { x: 680, y: 95, w: 258, h: 270 },
+      hallway: { x: 20, y: 428, w: 920, h: 96 },
+      entrance: { x: 374, y: 552, w: 212, h: 82 },
+    };
+    const DESK_POSITIONS = [
+      [84, 150], [216, 150], [348, 150], [480, 150], [612, 150],
+      [84, 212], [216, 212], [348, 212], [480, 212], [612, 212],
+      [84, 274], [216, 274], [348, 274], [480, 274], [612, 274],
+      [84, 336], [216, 336], [348, 336], [480, 336], [612, 336],
+    ];
+    const CLASSROOM_MAIN_LANE_Y = 382;
+    const HALLWAY_LANES = [452, 480, 506];
+    const WALK_NODES = {
+      classroomInside: { x: 405, y: 350, area: "classroom", door: "classroom" },
+      classroomDoor: { x: 405, y: 430, area: "hallway", door: "classroom" },
+      officeInside: { x: 746, y: 350, area: "office", door: "office" },
+      officeDoor: { x: 746, y: 430, area: "hallway", door: "office" },
+      hallwayLeft: { x: 165, y: 480, area: "hallway" },
+      hallwayCenter: { x: 482, y: 480, area: "hallway" },
+      hallwayRight: { x: 760, y: 480, area: "hallway" },
+      entranceDoor: { x: 470, y: 538, area: "hallway", door: "entrance" },
+      entranceInside: { x: 470, y: 592, area: "entrance", door: "entrance" },
+    };
+    const DOORS = {
+      classroom: { x: 377, y: 354, w: 58, h: 76 },
+      office: { x: 723, y: 354, w: 58, h: 76 },
+      entrance: { x: 418, y: 562, w: 104, h: 66 },
+    };
+
+    const canvas = document.querySelector("#canvas");
+    const ctx = canvas.getContext("2d");
+    const crowd = document.querySelector("#crowd");
+    const speed = document.querySelector("#speed");
+    const toggle = document.querySelector("#toggle");
+    const eventButton = document.querySelector("#event");
+
+    const state = {
+      images: new Map(),
+      directionImages: new Map(),
+      directionWalkImages: new Map(),
+      seatedImages: new Map(),
+      doorImages: new Map(),
+      objectImages: new Map(),
+      agents: [],
+      lastTime: 0,
+      elapsed: 0,
+      playing: true,
+      bg: null,
+    };
+
+    crowd.addEventListener("input", () => {
+      const count = Number(crowd.value);
+      let studentIndex = 0;
+      state.agents.forEach((agent) => {
+        if (agent.role === "teacher") {
+          agent.active = true;
+          return;
+        }
+        agent.active = studentIndex < count;
+        studentIndex += 1;
+      });
+    });
+
+    toggle.addEventListener("click", () => {
+      state.playing = !state.playing;
+      toggle.textContent = state.playing ? "Pause" : "Play";
+    });
+
+    eventButton.addEventListener("click", () => {
+      const active = state.agents.filter((agent) => agent.active);
+      for (let i = 0; i < Math.min(4, active.length); i += 1) {
+        triggerAction(active[Math.floor(Math.random() * active.length)]);
+      }
+    });
+
+    function loadImage(src) {
+      return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = reject;
+        image.src = src;
+      });
+    }
+
+    function randomPoint(areaKey, agent = null) {
+      if (areaKey === "classroom") {
+        if (Math.random() < 0.45) {
+          const seatIndex = chooseSeatIndex(agent);
+          return { ...getSeatStandPoint(seatIndex), seat: true, seatIndex };
+        }
+        const standingSpots = [
+          [78, 125], [190, 122], [300, 122], [520, 122],
+          [70, 382], [190, 382], [310, 382], [520, 382], [610, 382],
+          [40, 250], [640, 250],
+        ];
+        // Try up to 6 candidates: walkable + not too close to other agents.
+        let last = null;
+        for (let i = 0; i < 6; i += 1) {
+          const [bx, by] = standingSpots[Math.floor(Math.random() * standingSpots.length)];
+          const cand = { x: bx + (Math.random() - 0.5) * 60, y: by + (Math.random() - 0.5) * 24 };
+          last = cand;
+          if (!canAgentStandAt(cand.x, cand.y)) continue;
+          const tooClose = state.agents.some((a) =>
+            a.active && a !== agent && Math.hypot(a.x - cand.x, a.y - cand.y) < 32
+          );
+          if (!tooClose) return cand;
+        }
+        return last;
+      }
+      if (areaKey === "hallway") {
+        return {
+          x: 120 + Math.random() * 720,
+          y: HALLWAY_LANES[Math.floor(Math.random() * HALLWAY_LANES.length)] + (Math.random() - 0.5) * 8,
+        };
+      }
+      if (areaKey === "office") {
+        const spots = [[735, 205], [808, 248], [780, 316], [875, 298]];
+        const [x, y] = spots[Math.floor(Math.random() * spots.length)];
+        return { x: x + (Math.random() - 0.5) * 26, y: y + (Math.random() - 0.5) * 18 };
+      }
+      if (areaKey === "entrance") {
+        return { x: 350 + Math.random() * 190, y: 548 + Math.random() * 42 };
+      }
+      const area = AREAS[areaKey];
+      return {
+        x: area.x + 25 + Math.random() * (area.w - 50),
+        y: area.y + 35 + Math.random() * (area.h - 45),
+      };
+    }
+
+    function chooseArea(agent) {
+      if (agent.role === "teacher") return Math.random() < 0.65 ? "classroom" : "hallway";
+      const r = Math.random();
+      if (r < 0.45) return "classroom";
+      if (r < 0.88) return "hallway";
+      return "entrance";
+    }
+
+    function chooseSeatIndex(requestingAgent = null) {
+      const occupied = new Set(
+        state.agents
+          .filter((agent) => agent.active && agent !== requestingAgent && (agent.seated || agent.destinationSeat))
+          .map((agent) => agent.seated ? agent.seatIndex : agent.destinationSeatIndex)
+          .filter((index) => Number.isInteger(index))
+      );
+      const available = DESK_POSITIONS
+        .map((_, index) => index)
+        .filter((index) => !occupied.has(index));
+      const seats = available.length ? available : DESK_POSITIONS.map((_, index) => index);
+      return seats[Math.floor(Math.random() * seats.length)];
+    }
+
+    function routeFromArea(agent, toArea, point) {
+      const fromArea = agent.area;
+      const nodes = [];
+
+      if (fromArea === toArea) {
+        if (toArea === "classroom") {
+          return classroomRoute(agent, point);
+        } else if (toArea === "office") {
+          nodes.push({ x: agent.x, y: 346, area: "office" });
+          nodes.push({ x: point.x, y: 346, area: "office" });
+        } else if (toArea === "hallway") {
+          nodes.push({ x: agent.x, y: nearestHallwayLane(agent.y), area: "hallway" });
+          nodes.push({ x: point.x, y: nearestHallwayLane(point.y), area: "hallway" });
+        } else if (toArea === "entrance") {
+          nodes.push({ x: agent.x, y: 592, area: "entrance" });
+          nodes.push({ x: point.x, y: 592, area: "entrance" });
+        }
+        nodes.push({ ...point, area: toArea });
+        return nodes;
+      }
+
+      if (fromArea === "classroom") {
+        nodes.push(
+          ...classroomExitRoute(agent),
+          { x: WALK_NODES.classroomInside.x, y: CLASSROOM_MAIN_LANE_Y, area: "classroom" },
+          WALK_NODES.classroomInside,
+          WALK_NODES.classroomDoor
+        );
+      }
+      if (fromArea === "office") {
+        nodes.push(
+          { x: agent.x, y: 346, area: "office" },
+          WALK_NODES.officeInside,
+          WALK_NODES.officeDoor
+        );
+      }
+      if (fromArea === "entrance") {
+        nodes.push(
+          { x: agent.x, y: 592, area: "entrance" },
+          WALK_NODES.entranceInside,
+          WALK_NODES.entranceDoor
+        );
+      }
+      if (fromArea === "hallway") {
+        nodes.push({ x: agent.x, y: nearestHallwayLane(agent.y), area: "hallway" });
+      }
+
+      if (fromArea !== "hallway" && toArea !== "hallway") nodes.push(WALK_NODES.hallwayCenter);
+
+      if (toArea === "classroom") {
+        nodes.push(
+          WALK_NODES.classroomDoor,
+          WALK_NODES.classroomInside,
+          { x: WALK_NODES.classroomInside.x, y: CLASSROOM_MAIN_LANE_Y, area: "classroom" },
+          ...classroomEntryRoute(point)
+        );
+      } else if (toArea === "office") {
+        nodes.push(WALK_NODES.officeDoor, WALK_NODES.officeInside, { x: point.x, y: 346, area: "office" });
+      } else if (toArea === "entrance") {
+        nodes.push(WALK_NODES.hallwayCenter, WALK_NODES.entranceDoor, WALK_NODES.entranceInside);
+      } else if (toArea === "hallway") {
+        const hallwayNode = point.x < 320 ? WALK_NODES.hallwayLeft : point.x > 650 ? WALK_NODES.hallwayRight : WALK_NODES.hallwayCenter;
+        nodes.push(hallwayNode, { x: point.x, y: nearestHallwayLane(point.y), area: "hallway" });
+      }
+      nodes.push({ ...point, area: toArea });
+      return nodes;
+    }
+
+    function nearestHallwayLane(y) {
+      return HALLWAY_LANES.reduce((best, lane) => Math.abs(lane - y) < Math.abs(best - y) ? lane : best, HALLWAY_LANES[0]);
+    }
+
+    function classroomRoute(agent, point) {
+      const fromAisleX = classroomAisleForPoint(agent.x, agent.seatIndex);
+      const toAisleX = classroomAisleForPoint(point.x, point.seatIndex);
+      return [
+        { x: fromAisleX, y: agent.y, area: "classroom" },
+        { x: fromAisleX, y: CLASSROOM_MAIN_LANE_Y, area: "classroom" },
+        { x: toAisleX, y: CLASSROOM_MAIN_LANE_Y, area: "classroom" },
+        { x: toAisleX, y: point.y, area: "classroom" },
+        { ...point, area: "classroom" },
+      ];
+    }
+
+    function classroomExitRoute(agent) {
+      const fromAisleX = classroomAisleForPoint(agent.x, agent.seatIndex);
+      return [
+        { x: fromAisleX, y: agent.y, area: "classroom" },
+        { x: fromAisleX, y: CLASSROOM_MAIN_LANE_Y, area: "classroom" },
+      ];
+    }
+
+    function classroomEntryRoute(point) {
+      const toAisleX = classroomAisleForPoint(point.x, point.seatIndex);
+      return [
+        { x: toAisleX, y: CLASSROOM_MAIN_LANE_Y, area: "classroom" },
+        { x: toAisleX, y: point.y, area: "classroom" },
+        { ...point, area: "classroom" },
+      ];
+    }
+
+    function classroomAisleForPoint(x, seatIndex = null) {
+      if (Number.isInteger(seatIndex)) {
+        return getSeatStandPoint(seatIndex).x;
+      }
+      if (x < 160) return 52;
+      if (x < 280) return 160;
+      if (x < 400) return 280;
+      if (x < 520) return 400;
+      return 632;
+    }
+
+    function getSeatStandPoint(seatIndex) {
+      const [seatX, seatY] = DESK_POSITIONS[seatIndex];
+      const aisleX = seatX > 520 ? seatX - 52 : seatX + 52;
+      return { x: aisleX, y: seatY + SEAT_OFFSET_Y };
+    }
+
+    function setNewTarget(agent, forceArea = null) {
+      const area = forceArea || chooseArea(agent);
+      const point = randomPoint(area, agent);
+      const route = routeFromArea(agent, area, point);
+      agent.route = route.filter((node, index, all) => {
+        if (index === 0) return Math.hypot(node.x - agent.x, node.y - agent.y) > 12;
+        const prev = all[index - 1];
+        return Math.hypot(node.x - prev.x, node.y - prev.y) > 12;
+      });
+      agent.destinationArea = area;
+      agent.destinationSeat = Boolean(point.seat);
+      agent.destinationSeatIndex = point.seatIndex ?? null;
+      const next = agent.route[0] || point;
+      agent.targetX = next.x;
+      agent.targetY = next.y;
+      agent.seated = false;
+      agent.seatIndex = null;
+    }
+
+    function triggerAction(agent) {
+      agent.action = ACTIONS[Math.floor(Math.random() * ACTIONS.length)];
+      agent.actionUntil = state.elapsed + 1.7 + Math.random() * 1.4;
+      agent.pauseUntil = agent.actionUntil;
+      agent.bubble = {
+        text: agent.action === "talk" ? "..." : agent.action === "raise" ? "!" : " ",
+        until: agent.actionUntil,
+      };
+    }
+
+    function motionFor(agent, moving) {
+      if (state.elapsed < agent.actionUntil) return agent.action;
+      if (moving) return "walk";
+      return "idle";
+    }
+
+    function updateAgent(agent, dt) {
+      if (!agent.active) return;
+      if (state.elapsed > agent.actionUntil) {
+        agent.action = "idle";
+      }
+
+      if (agent.seated && state.elapsed > agent.pauseUntil && state.elapsed > agent.actionUntil) {
+        setNewTarget(agent, Math.random() < 0.45 ? "classroom" : "hallway");
+      }
+
+      const paused = state.elapsed < agent.pauseUntil;
+      if (!paused) {
+        const dx = agent.targetX - agent.x;
+        const dy = agent.targetY - agent.y;
+        const dist = Math.hypot(dx, dy);
+        const baseSpeed = (agent.role === "teacher" ? 32 : 42) * Number(speed.value);
+        if (dist > 2) {
+          const nextX = agent.x + (dx / dist) * baseSpeed * dt;
+          const nextY = agent.y + (dy / dist) * baseSpeed * dt;
+          if (!canAgentStandAt(nextX, nextY)) {
+            agent.pauseUntil = state.elapsed + 0.25;
+            setNewTarget(agent, agent.area);
+            return;
+          }
+          agent.x = nextX;
+          agent.y = nextY;
+          agent.direction = directionFromVector(dx, dy);
+        } else {
+          agent.x = agent.targetX;
+          agent.y = agent.targetY;
+          const reached = agent.route.shift();
+          if (reached?.area) agent.area = reached.area;
+          const next = agent.route[0];
+          if (next) {
+            agent.targetX = next.x;
+            agent.targetY = next.y;
+            agent.pauseUntil = state.elapsed + 0.08 + Math.random() * 0.16;
+          } else {
+            agent.area = agent.destinationArea || agent.area;
+            agent.pauseUntil = state.elapsed + 0.5 + Math.random() * 1.8;
+            agent.seated = agent.destinationSeat && agent.role === "student";
+            if (agent.seated) {
+              agent.direction = "north";
+              agent.seatIndex = agent.destinationSeatIndex;
+              const seatStandPoint = getSeatStandPoint(agent.seatIndex);
+              agent.x = seatStandPoint.x;
+              agent.y = seatStandPoint.y;
+              agent.targetX = seatStandPoint.x;
+              agent.targetY = seatStandPoint.y;
+              agent.pauseUntil = state.elapsed + 1.2 + Math.random() * 3.0;
+              if (Math.random() < 0.3) triggerAction(agent);
+              else agent.nextActionAt = Math.min(agent.nextActionAt, state.elapsed + 2 + Math.random() * 3);
+            } else if (Math.random() < 0.18) triggerAction(agent);
+            else setNewTarget(agent);
+          }
+        }
+      }
+
+      if (state.elapsed > agent.nextActionAt) {
+        triggerAction(agent);
+        agent.nextActionAt = state.elapsed + 8 + Math.random() * 10;
+      }
+
+    }
+
+    function directionFromVector(dx, dy) {
+      if (Math.abs(dx) > Math.abs(dy) * 1.15) return dx > 0 ? "east" : "west";
+      return dy > 0 ? "south" : "north";
+    }
+
+    function canAgentStandAt(x, y) {
+      const radius = 8;
+      const samples = [
+        [x, y],
+        [x - radius, y],
+        [x + radius, y],
+        [x, y - radius],
+        [x, y + radius],
+      ];
+      return samples.every(([sx, sy]) => (
+        isInWalkableArea(sx, sy) && !isBlockedByStructure(sx, sy)
+      ));
+    }
+
+    function isInWalkableArea(x, y) {
+      return getWalkableRects().some((rect) => pointInRect(x, y, rect));
+    }
+
+    function isBlockedByStructure(x, y) {
+      return getSolidRects().some((rect) => pointInRect(x, y, rect));
+    }
+
+    function pointInRect(x, y, rect) {
+      return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
+    }
+
+    function getWalkableRects() {
+      return [
+        { x: 18, y: 18, w: 628, h: 352 },
+        { x: 370, y: 350, w: 74, h: 86 },
+        { x: 668, y: 18, w: 270, h: 352 },
+        { x: 716, y: 350, w: 74, h: 86 },
+        { x: 0, y: 420, w: 960, h: 106 },
+        { x: 370, y: 526, w: 220, h: 114 },
+        { x: 410, y: 510, w: 120, h: 130 },
+      ];
+    }
+
+    function getSolidRects() {
+      return [
+        ...getClassroomObstacleRects(),
+        ...getOfficeObstacleRects(),
+        ...getHallwayObstacleRects(),
+        ...getEntranceObstacleRects(),
+      ];
+    }
+
+    function getClassroomObstacleRects() {
+      return [
+        { x: 35, y: 35, w: 105, h: 120 },
+        { x: 118, y: 105, w: 36, h: 45 },
+        { x: 270, y: 40, w: 214, h: 62 },
+        { x: 610, y: 84, w: 45, h: 68 },
+        ...DESK_POSITIONS.map((_, index) => getDeskStructure(index).solid),
+      ];
+    }
+
+    function getOfficeObstacleRects() {
+      return [
+        { x: 695, y: 78, w: 45, h: 82 },
+        { x: 770, y: 132, w: 100, h: 85 },
+        { x: 805, y: 235, w: 120, h: 42 },
+        { x: 850, y: 50, w: 78, h: 118 },
+        { x: 900, y: 260, w: 46, h: 70 },
+      ];
+    }
+
+    function getHallwayObstacleRects() {
+      return [
+        { x: 35, y: 410, w: 225, h: 54 },
+        { x: 305, y: 410, w: 85, h: 56 },
+        { x: 620, y: 410, w: 152, h: 56 },
+        { x: 835, y: 410, w: 80, h: 56 },
+        { x: 14, y: 426, w: 40, h: 68 },
+        { x: 570, y: 494, w: 44, h: 44 },
+        { x: 785, y: 408, w: 52, h: 66 },
+      ];
+    }
+
+    function getEntranceObstacleRects() {
+      return [
+        { x: 392, y: 582, w: 176, h: 58 },
+        { x: 277, y: 560, w: 116, h: 56 },
+        { x: 613, y: 560, w: 116, h: 56 },
+      ];
+    }
+
+    function getDeskStructure(index) {
+      const [x, y] = DESK_POSITIONS[index];
+      const imageX = x - DESK_RENDER_W / 2;
+      const imageY = y - 16;
+      return {
+        x,
+        y,
+        image: { x: imageX, y: imageY, w: DESK_RENDER_W, h: DESK_RENDER_H },
+        sortY: imageY + DESK_RENDER_H - 6,
+        solid: { x: imageX - 3, y: imageY + 2, w: DESK_RENDER_W + 6, h: DESK_RENDER_H - 8 },
+        top: { x: x - DESK_W / 2, y: y - 9, w: DESK_W, h: DESK_TOP_H },
+        occluder: { x: x - DESK_W / 2, y: y + 19, w: DESK_W, h: DESK_FRONT_H },
+      };
+    }
+
+    function drawRoomLabel(text, x, y) {
+      ctx.fillStyle = "rgba(15, 23, 42, 0.78)";
+      ctx.fillRect(x, y, text.length * 12 + 18, 24);
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.45)";
+      ctx.strokeRect(x, y, text.length * 12 + 18, 24);
+      ctx.fillStyle = "#e5e7eb";
+      ctx.font = "12px sans-serif";
+      ctx.fillText(text, x + 9, y + 16);
+    }
+
+    function drawMap() {
+      drawStaticMap();
+      drawDoorOverlays();
+    }
+
+    function drawStaticMap() {
+      if (state.bg) {
+        ctx.drawImage(state.bg, 0, 0, WORLD_W, WORLD_H);
+        return;
+      }
+
+      ctx.fillStyle = "#2f2d49";
+      ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+
+      drawRoom(18, 18, 628, 352, "#ead9a5", "#d6c58f");
+      drawRoom(668, 18, 270, 352, "#d8d1c1", "#b8b0a0");
+      drawRoom(18, 395, 920, 130, "#ead9a5", "#d6c58f");
+      drawRoom(370, 535, 220, 105, "#d7c48d", "#bba66f");
+      drawAmbientFloorShadows();
+
+      drawWallFrame(18, 18, 628, 352, [
+        { x: 376, y: 358, w: 62, h: 16 },
+      ]);
+      drawWallFrame(668, 18, 270, 352, [
+        { x: 720, y: 358, w: 62, h: 16 },
+      ]);
+      drawWallFrame(18, 395, 920, 130, [
+        { x: 416, y: 522, w: 108, h: 14 },
+      ]);
+      drawWallFrame(370, 535, 220, 105, [
+        { x: 416, y: 535, w: 108, h: 14 },
+      ]);
+
+      drawWindow(155, 44, 120, 48, "#8ec3dc");
+      drawWindow(520, 44, 90, 48, "#8ec3dc");
+      drawWindow(748, 50, 120, 52, "#93c5dd");
+      drawWindow(291, 585, 90, 42, "#8ec3dc");
+      drawWindow(623, 585, 90, 42, "#8ec3dc");
+      drawBoard(272, 44, 210, 58);
+      drawBookcase(54, 48, 84, 104);
+      drawBookcase(850, 70, 72, 100);
+      drawLockers(50, 418, 240, 46);
+      drawLockers(635, 418, 150, 46);
+      drawNoticeBoard(305, 415, 78, 52);
+      drawNoticeBoard(835, 415, 70, 52);
+      drawPlant(132, 112, 26);
+      drawPlant(612, 112, 28);
+      drawPlant(910, 320, 24);
+      drawPlant(32, 430, 24);
+      drawPlant(580, 505, 20);
+      drawRoomLabel("교실", 35, 35);
+      drawRoomLabel("교무실", 684, 35);
+      drawRoomLabel("복도", 35, 402);
+      drawRoomLabel("입구", 385, 548);
+    }
+
+    function drawRoom(x, y, w, h, base, grid) {
+      ctx.fillStyle = base;
+      ctx.fillRect(x, y, w, h);
+      drawTileGrid(x + 8, y + 8, w - 16, h - 16, 22, grid);
+      ctx.fillStyle = "rgba(255,255,255,0.16)";
+      ctx.fillRect(x + 10, y + 10, w - 20, 3);
+      ctx.fillStyle = "rgba(62,48,42,0.08)";
+      ctx.fillRect(x + 10, y + h - 26, w - 20, 18);
+      ctx.fillStyle = "rgba(95,77,54,0.28)";
+      ctx.fillRect(x + 10, y + 70, w - 20, 4);
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      ctx.fillRect(x + 10, y + 74, w - 20, 2);
+    }
+
+    function drawAmbientFloorShadows() {
+      ctx.fillStyle = "rgba(30, 29, 48, 0.12)";
+      ctx.fillRect(18, 362, 628, 8);
+      ctx.fillRect(668, 362, 270, 8);
+      ctx.fillRect(18, 515, 920, 10);
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      ctx.fillRect(42, 104, 570, 2);
+      ctx.fillRect(696, 104, 214, 2);
+      ctx.fillRect(44, 476, 870, 2);
+    }
+
+    function drawTileGrid(x, y, w, h, size, color) {
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      for (let gx = x; gx <= x + w; gx += size) {
+        ctx.beginPath();
+        ctx.moveTo(Math.round(gx), y);
+        ctx.lineTo(Math.round(gx), y + h);
+        ctx.stroke();
+      }
+      for (let gy = y; gy <= y + h; gy += size) {
+        ctx.beginPath();
+        ctx.moveTo(x, Math.round(gy));
+        ctx.lineTo(x + w, Math.round(gy));
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawWallFrame(x, y, w, h, gaps = []) {
+      const wall = "#35324f";
+      const trim = "#776048";
+      drawPixelRect(x - 10, y - 10, w + 20, 12, wall, trim);
+      drawPixelRect(x - 10, y + h - 2, w + 20, 12, wall, trim);
+      drawPixelRect(x - 10, y - 10, 12, h + 20, wall, trim);
+      drawPixelRect(x + w - 2, y - 10, 12, h + 20, wall, trim);
+      ctx.fillStyle = "rgba(255,255,255,0.12)";
+      ctx.fillRect(x - 8, y - 8, w + 16, 2);
+      ctx.fillRect(x - 8, y + h, w + 16, 2);
+      for (const gap of gaps) {
+        ctx.clearRect(gap.x, gap.y, gap.w, gap.h);
+        ctx.fillStyle = "#ead9a5";
+        ctx.fillRect(gap.x, gap.y, gap.w, gap.h);
+      }
+    }
+
+    function drawPixelRect(x, y, w, h, fill, stroke = "#1f2937") {
+      ctx.fillStyle = fill;
+      ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    }
+
+    function drawWindow(x, y, w, h, fill) {
+      ctx.fillStyle = "rgba(15,23,42,0.16)";
+      ctx.fillRect(x + 5, y + 5, w, h);
+      drawPixelRect(x, y, w, h, "#f8fafc", "#57496a");
+      ctx.fillStyle = fill;
+      ctx.fillRect(x + 8, y + 8, w / 2 - 12, h - 16);
+      ctx.fillRect(x + w / 2 + 4, y + 8, w / 2 - 12, h - 16);
+      ctx.fillStyle = "rgba(255,255,255,0.28)";
+      ctx.fillRect(x + 13, y + 12, w / 2 - 22, 5);
+      ctx.fillRect(x + w / 2 + 9, y + 12, w / 2 - 22, 5);
+      ctx.strokeStyle = "#f8fafc";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x + w / 2, y + 7);
+      ctx.lineTo(x + w / 2, y + h - 7);
+      ctx.moveTo(x + 8, y + h / 2);
+      ctx.lineTo(x + w - 8, y + h / 2);
+      ctx.stroke();
+    }
+
+    function drawBoard(x, y, w, h) {
+      ctx.fillStyle = "rgba(15,23,42,0.18)";
+      ctx.fillRect(x + 6, y + 6, w, h);
+      drawPixelRect(x, y, w, h, "#315342", "#263247");
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      ctx.fillRect(x + 8, y + 7, w - 16, 4);
+      ctx.fillStyle = "#cbd5c0";
+      ctx.fillRect(x + 28, y + 20, 62, 6);
+      ctx.fillRect(x + 95, y + 30, 70, 6);
+      ctx.fillRect(x + 175, y + 42, 24, 6);
+    }
+
+    function drawBookcase(x, y, w, h) {
+      ctx.fillStyle = "rgba(15,23,42,0.16)";
+      ctx.fillRect(x + 5, y + 6, w, h);
+      drawPixelRect(x, y, w, h, "#6a4428", "#2f2230");
+      ctx.fillStyle = "rgba(255,255,255,0.10)";
+      ctx.fillRect(x + 6, y + 6, w - 12, 4);
+      const colors = ["#e24b48", "#e7a633", "#5e9d59", "#4777b5", "#f4e3a3"];
+      for (let row = 0; row < 3; row += 1) {
+        ctx.fillStyle = "#9c6738";
+        ctx.fillRect(x + 10, y + 27 + row * 28, w - 20, 5);
+        for (let col = 0; col < 4; col += 1) {
+          ctx.fillStyle = colors[(row + col) % colors.length];
+          ctx.fillRect(x + 12 + col * 14, y + 12 + row * 28, 9, 22);
+        }
+      }
+    }
+
+    function drawLockers(x, y, w, h) {
+      ctx.fillStyle = "rgba(15,23,42,0.16)";
+      ctx.fillRect(x + 4, y + 5, w, h);
+      drawPixelRect(x, y, w, h, "#315a7c", "#223047");
+      const count = Math.max(3, Math.floor(w / 42));
+      for (let i = 1; i < count; i += 1) {
+        ctx.fillStyle = "#223047";
+        ctx.fillRect(x + i * (w / count), y + 2, 2, h - 4);
+      }
+      for (let i = 0; i < count; i += 1) {
+        ctx.fillStyle = "#7fa2b9";
+        ctx.fillRect(x + i * (w / count) + 13, y + 12, 16, 3);
+      }
+    }
+
+    function drawNoticeBoard(x, y, w, h) {
+      drawPixelRect(x, y, w, h, "#4b6f45", "#6f4a2e");
+      ctx.fillStyle = "#f3e8c6";
+      ctx.fillRect(x + 12, y + 12, 18, 24);
+      ctx.fillRect(x + 42, y + 18, 20, 22);
+    }
+
+    function drawPlant(x, y, r) {
+      ctx.fillStyle = "#70533d";
+      ctx.fillRect(x - r / 2, y + r / 2, r, r * 0.9);
+      ctx.fillStyle = "#28633f";
+      for (let i = 0; i < 7; i += 1) {
+        const angle = (Math.PI * 2 * i) / 7;
+        ctx.beginPath();
+        ctx.arc(x + Math.cos(angle) * r * 0.28, y + Math.sin(angle) * r * 0.18, r * 0.38, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function isSeatOccupied(index) {
+      return state.agents.some((agent) => agent.active && agent.seated && agent.seatIndex === index);
+    }
+
+    function seatedAgentAt(index) {
+      return state.agents.find((agent) => agent.active && agent.seated && agent.seatIndex === index) || null;
+    }
+
+    function drawDeskCell(desk, seatedAgent = null) {
+      drawChair(desk.x, desk.y + 25);
+      if (seatedAgent) drawSeatedAgentAtDesk(seatedAgent, desk);
+      drawStudentDeskBack(desk);
+      if (seatedAgent) drawStudentDeskOccluder(desk);
+      if (seatedAgent) drawBubble(seatedAgent);
+    }
+
+    function drawChair(x, y) {
+      const chairImage = state.objectImages.get("studentChair");
+      if (chairImage) {
+        ctx.drawImage(chairImage, x - 15, y - 19, 30, 42);
+        return;
+      }
+      ctx.fillStyle = "rgba(15,23,42,0.16)";
+      ctx.fillRect(x - 21, y + 16, 42, 10);
+      drawPixelRect(x - 16, y - 12, 32, 28, "#a86732", "#263247");
+      ctx.fillStyle = "#74451f";
+      ctx.fillRect(x - 10, y - 6, 20, 10);
+      ctx.fillStyle = "#263247";
+      ctx.fillRect(x - 18, y + 12, 5, 20);
+      ctx.fillRect(x + 13, y + 12, 5, 20);
+    }
+
+    function drawStudentDeskBack(desk) {
+      const image = state.objectImages.get("studentDesk");
+      const { x, y, top } = desk;
+      if (image) {
+        drawStructureImage(image, desk.image.x, desk.image.y, desk.image.w, desk.image.h);
+        return;
+      }
+      ctx.fillStyle = "rgba(15,23,42,0.16)";
+      ctx.fillRect(top.x - 1, top.y + 4, top.w + 6, top.h + 4);
+      drawPixelRect(top.x, top.y, top.w, top.h, "#d69a50", "#263247");
+      ctx.fillStyle = "#efbd72";
+      ctx.fillRect(x - 33, y - 7, 66, 4);
+      ctx.fillStyle = "#b77935";
+      ctx.fillRect(x - 31, y + 9, 62, 5);
+      ctx.fillStyle = "rgba(255,255,255,0.18)";
+      ctx.fillRect(x - 30, y - 10, 58, 2);
+    }
+
+    function drawStudentDeskOccluder(desk) {
+      const image = state.objectImages.get("studentDesk");
+      const { x, y } = desk;
+      const clipY = desk.image.y + desk.image.h * 0.42;
+      const clipH = desk.image.h * 0.58;
+      if (image) {
+        drawStructureClip(
+          image,
+          desk.image.x,
+          desk.image.y,
+          desk.image.w,
+          desk.image.h,
+          desk.image.x,
+          clipY,
+          desk.image.w,
+          clipH
+        );
+        return;
+      }
+      ctx.fillStyle = "#c4863f";
+      ctx.fillRect(x - DESK_W / 2, y + 12, DESK_W, 18);
+      ctx.fillStyle = "#263247";
+      ctx.fillRect(x - DESK_W / 2, y + 12, DESK_W, 3);
+    }
+
+    function drawTeacherDeskBack() {
+      const image = state.objectImages.get("teacherDesk");
+      if (image) {
+        drawStructureImage(image, 306, 110, 154, 100);
+        return;
+      }
+      ctx.fillStyle = "rgba(15,23,42,0.18)";
+      ctx.fillRect(323, 132, 126, 54);
+      drawPixelRect(318, 125, 126, 48, "#b8793e", "#4b2d25");
+      ctx.fillStyle = "#d39854";
+      ctx.fillRect(326, 132, 110, 5);
+      ctx.fillStyle = "#f3e8c6";
+      ctx.fillRect(346, 136, 24, 24);
+      ctx.fillStyle = "#1f2937";
+      ctx.fillRect(397, 134, 24, 28);
+    }
+
+    function drawTeacherDeskFront() {
+      const image = state.objectImages.get("teacherDesk");
+      if (image) {
+        drawStructureClip(image, 306, 110, 154, 100, 318, 160, 126, 44);
+        return;
+      }
+      ctx.fillStyle = "#8f572f";
+      ctx.fillRect(319, 165, 124, 10);
+      ctx.fillStyle = "#4b2d25";
+      ctx.fillRect(318, 173, 126, 3);
+    }
+
+    function drawStructureImage(image, x, y, w, h) {
+      ctx.drawImage(image, Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    }
+
+    function drawStructureClip(image, x, y, w, h, clipX, clipY, clipW, clipH) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(Math.round(clipX), Math.round(clipY), Math.round(clipW), Math.round(clipH));
+      ctx.clip();
+      drawStructureImage(image, x, y, w, h);
+      ctx.restore();
+    }
+
+    function drawOfficeFurniture() {
+      drawPixelRect(724, 151, 120, 58, "#9a6035", "#4b2d25");
+      ctx.fillStyle = "#1f2937";
+      ctx.fillRect(736, 162, 28, 25);
+      ctx.fillStyle = "#315342";
+      ctx.fillRect(772, 162, 42, 28);
+      drawPixelRect(790, 250, 120, 46, "#1f4b78", "#263247");
+      drawPixelRect(704, 118, 32, 66, "#4b5563", "#263247");
+    }
+
+    function doorOpenAmount(doorKey) {
+      const door = DOORS[doorKey];
+      if (!door) return 0;
+      let amount = 0;
+      for (const agent of state.agents) {
+        if (!agent.active) continue;
+        const dist = Math.hypot(agent.x - (door.x + door.w / 2), agent.y - (door.y + door.h / 2));
+        if (dist < 58) amount = Math.max(amount, 1 - dist / 58);
+        if (agent.route?.some((node) => node.door === doorKey)) amount = Math.max(amount, 0.7);
+      }
+      return amount;
+    }
+
+    function drawDoorPanel(x, y, w, h, open, horizontal = false) {
+      ctx.save();
+      ctx.globalAlpha = 0.95;
+      ctx.fillStyle = "#8b4e2f";
+      ctx.strokeStyle = "#4b2b1f";
+      ctx.lineWidth = 3;
+      if (horizontal) {
+        const leftOpen = Math.round(open * 30);
+        const rightOpen = Math.round(open * 30);
+        ctx.fillRect(x - leftOpen, y, w / 2, h);
+        ctx.strokeRect(x - leftOpen, y, w / 2, h);
+        ctx.fillRect(x + w / 2 + rightOpen, y, w / 2, h);
+        ctx.strokeRect(x + w / 2 + rightOpen, y, w / 2, h);
+      } else {
+        const swing = Math.round(open * 32);
+        ctx.fillRect(x - swing, y + swing * 0.25, Math.max(8, w - open * 18), h);
+        ctx.strokeRect(x - swing, y + swing * 0.25, Math.max(8, w - open * 18), h);
+      }
+      ctx.restore();
+    }
+
+    function drawDoorOverlays() {
+      for (const key of ["classroom", "office", "entrance"]) {
+        const image = state.doorImages.get(key);
+        const door = DOORS[key];
+        const frame = Math.max(0, Math.min(4, Math.round(doorOpenAmount(key) * 4)));
+        if (image) {
+          ctx.drawImage(
+            image,
+            frame * DOOR_FRAME_W,
+            0,
+            DOOR_FRAME_W,
+            DOOR_FRAME_H,
+            door.x,
+            door.y,
+            door.w,
+            door.h
+          );
+        } else {
+          drawDoorPanel(door.x, door.y, door.w, door.h, frame / 4, key === "entrance");
+        }
+      }
+    }
+
+    function drawBubble(agent) {
+      if (!agent.bubble || state.elapsed > agent.bubble.until) return;
+      const desk = agent.seated && Number.isInteger(agent.seatIndex) ? getDeskStructure(agent.seatIndex) : null;
+      const x = desk ? desk.x + 20 : agent.x + 20;
+      const y = desk ? desk.y - 54 : agent.y - 68;
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, (agent.bubble.until - state.elapsed) / 0.4);
+      ctx.fillStyle = agent.action === "talk" ? "#ffffff" : agent.action === "raise" ? "#fef3c7" : "#dbeafe";
+      ctx.strokeStyle = "rgba(15, 23, 42, 0.45)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(x, y, 34, 25, 6);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#111827";
+      ctx.font = "bold 14px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(agent.bubble.text, x + 17, y + 17);
+      ctx.restore();
+    }
+
+    function drawSeatedAgentAtDesk(agent, desk) {
+      const assetId = agent.assetId || agent.id;
+      const directionImage = state.directionImages.get(assetId);
+      const seatedImage = state.seatedImages.get(assetId);
+      const spriteImage = directionImage || seatedImage || state.images.get(assetId);
+      if (!spriteImage) return;
+
+      const motion = motionFor(agent, false);
+      const scale = CHARACTER_SCALE[assetId] ?? CHARACTER_SCALE.default;
+      const drawSize = SEATED_DIRECTION_SIZE * scale;
+      const frameIndex = directionImage
+        ? DIRECTION_FRAME.north
+        : seatedImage
+        ? seatedFrameFor(agent, motion)
+        : 0;
+      const x = Math.round(desk.x - drawSize / 2);
+      const y = Math.round(desk.y - drawSize + 6);
+
+      ctx.save();
+      ctx.drawImage(
+        spriteImage,
+        frameIndex * FRAME_W,
+        0,
+        FRAME_W,
+        FRAME_H,
+        x,
+        y,
+        drawSize,
+        drawSize
+      );
+      ctx.restore();
+    }
+
+    function drawAgent(agent) {
+      const assetId = agent.assetId || agent.id;
+      const image = state.images.get(assetId);
+      const directionImage = state.directionImages.get(assetId);
+      const directionWalkImage = state.directionWalkImages.get(assetId);
+      const seatedImage = state.seatedImages.get(assetId);
+      if (!image || !agent.active) return;
+      const dx = agent.targetX - agent.x;
+      const dy = agent.targetY - agent.y;
+      const moving = Math.hypot(dx, dy) > 3 && state.elapsed >= agent.pauseUntil;
+      const motion = motionFor(agent, moving);
+      const frames = MOTION_FRAMES[motion] || MOTION_FRAMES.idle;
+      const useDeskSeatedPose = Boolean(agent.seated && directionImage && !moving);
+      const useSeated = Boolean(agent.seated && seatedImage && !moving && !useDeskSeatedPose);
+      const useDirectionalWalk = directionWalkImage && moving;
+      const useDirectionalIdle = directionImage && !useDirectionalWalk && !useSeated && motion === "idle";
+      const direction = agent.direction || "south";
+      const frameIndex = useDeskSeatedPose
+        ? DIRECTION_FRAME.north
+        : useSeated
+        ? seatedFrameFor(agent, motion)
+        : useDirectionalWalk
+        ? DIRECTION_WALK_FRAME[direction] + (Math.floor(state.elapsed * 7) % 2)
+        : useDirectionalIdle
+        ? DIRECTION_FRAME[direction]
+        : frames[Math.floor(state.elapsed * (motion === "walk" ? 6 : 4)) % frames.length];
+      const bob = motion === "walk" ? Math.sin(state.elapsed * 14) * 1.2 : 0;
+      const jitter = motion === "fidget" ? Math.sin(state.elapsed * 18) * 3 : 0;
+      const spriteImage = useDeskSeatedPose ? directionImage : useSeated ? seatedImage : useDirectionalWalk ? directionWalkImage : useDirectionalIdle ? directionImage : image;
+      const scale = CHARACTER_SCALE[assetId] ?? CHARACTER_SCALE.default;
+      const baseSize = useDeskSeatedPose ? SEATED_DIRECTION_SIZE : useSeated ? SEATED_SPRITE_SIZE : SPRITE_SIZE;
+      const motionScale = useDirectionalWalk ? (WALK_SCALE[assetId] ?? WALK_SCALE.default) : 1;
+      const drawSize = baseSize * scale * motionScale;
+      const yOffset = useDeskSeatedPose ? -drawSize + 8 : useSeated ? -drawSize + 11 : -drawSize + 14;
+
+      const flipForEast = (useDirectionalWalk || useDirectionalIdle) && direction === "east";
+
+      ctx.save();
+      ctx.translate(Math.round(agent.x + jitter), Math.round(agent.y + bob));
+      if (flipForEast) ctx.scale(-1, 1);
+      if (useSeated) {
+        ctx.drawImage(
+          spriteImage,
+          frameIndex * FRAME_W,
+          0,
+          FRAME_W,
+          FRAME_H,
+          -drawSize / 2,
+          yOffset,
+          drawSize,
+          drawSize
+        );
+      } else {
+        ctx.drawImage(
+          spriteImage,
+          frameIndex * FRAME_W,
+          0,
+          FRAME_W,
+          FRAME_H,
+          -drawSize / 2,
+          yOffset,
+          drawSize,
+          drawSize
+        );
+      }
+      ctx.restore();
+      drawBubble(agent);
+    }
+
+    function seatedFrameFor(agent, motion) {
+      if (motion === "raise") return SEATED_FRAME.raise;
+      if (motion === "fidget") return SEATED_FRAME.fidget;
+      return agent.direction === "north" ? SEATED_FRAME.back : SEATED_FRAME.front;
+    }
+
+    function drawFocusLine() {
+      const teacher = state.agents.find((agent) => agent.role === "teacher");
+      const target = state.agents.find((agent) => agent.active && agent.role === "student" && state.elapsed < agent.actionUntil);
+      if (!teacher || !target) return;
+      ctx.save();
+      ctx.strokeStyle = "rgba(251, 191, 36, 0.55)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 7]);
+      ctx.beginPath();
+      ctx.moveTo(teacher.x, teacher.y - 54);
+      ctx.lineTo(target.x, target.y - 54);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function render(now) {
+      const seconds = now / 1000;
+      const dt = Math.min(0.05, state.lastTime ? seconds - state.lastTime : 0);
+      state.lastTime = seconds;
+      if (state.playing) state.elapsed += dt;
+
+      drawMap();
+      if (state.playing) {
+        for (const agent of state.agents) updateAgent(agent, dt);
+      }
+      drawFocusLine();
+      drawSortedSceneItems();
+
+      requestAnimationFrame(render);
+    }
+
+    function drawSortedSceneItems() {
+      const items = [
+        ...DESK_POSITIONS.map((_, index) => ({
+          y: getDeskStructure(index).sortY,
+          draw: () => drawDeskCell(getDeskStructure(index), seatedAgentAt(index)),
+        })),
+        ...state.agents
+          .filter((agent) => agent.active && !agent.seated)
+          .map((agent) => ({
+            y: agent.y,
+            draw: () => drawAgent(agent),
+          })),
+      ];
+      items.sort((a, b) => a.y - b.y).forEach((item) => item.draw());
+    }
+
+    async function init() {
+      const manifest = await fetch("./manifest.json").then((response) => response.json());
+
+      state.bg = await loadImage(BACKGROUND_ASSET).catch(() => null);
+
+      await Promise.all(Object.entries(STRUCTURE_ASSETS).map(async ([key, src]) => {
+        const image = await loadImage(src).catch(() => null);
+        if (image) state.objectImages.set(key, image);
+      }));
+
+      await Promise.all(Object.entries(manifest.doors || {}).map(async ([key, src]) => {
+        const image = await loadImage(src);
+        state.doorImages.set(key, image);
+      }));
+
+      const rosterAssets = manifest.characters.filter((character) => (
+        STUDENT_CHARACTER_IDS.includes(character.id) || character.id === TEACHER_CHARACTER_ID
+      ));
+
+      await Promise.all(rosterAssets.map(async (character) => {
+        const [image, directionImage, directionWalkImage, seatedImage] = await Promise.all([
+          loadImage(character.sheet),
+          character.direction_sheet ? loadImage(character.direction_sheet) : Promise.resolve(null),
+          character.direction_walk_sheet ? loadImage(character.direction_walk_sheet) : Promise.resolve(null),
+          character.seated_sheet ? loadImage(character.seated_sheet) : Promise.resolve(null),
+        ]);
+        state.images.set(character.id, image);
+        if (directionImage) state.directionImages.set(character.id, directionImage);
+        if (directionWalkImage) state.directionWalkImages.set(character.id, directionWalkImage);
+        if (seatedImage) state.seatedImages.set(character.id, seatedImage);
+      }));
+
+      const students = Array.from({ length: STUDENT_COUNT }, (_, index) => {
+        const assetId = STUDENT_CHARACTER_IDS[index % STUDENT_CHARACTER_IDS.length];
+        const seatStandPoint = getSeatStandPoint(index);
+        return {
+          id: `student_${String(index + 1).padStart(2, "0")}`,
+          assetId,
+          role: "student",
+          active: index < Number(crowd.value),
+          x: seatStandPoint.x,
+          y: seatStandPoint.y,
+          targetX: seatStandPoint.x,
+          targetY: seatStandPoint.y,
+          area: "classroom",
+          destinationArea: "classroom",
+          destinationSeat: true,
+          destinationSeatIndex: index,
+          route: [],
+          direction: "north",
+          action: "idle",
+          actionUntil: 0,
+          seated: true,
+          seatIndex: index,
+          pauseUntil: state.elapsed + 0.6 + Math.random() * 1.8,
+          nextActionAt: 1.5 + Math.random() * 4,
+          bubble: null,
+        };
+      });
+
+      const teacher = {
+        id: "teacher_01",
+        assetId: TEACHER_CHARACTER_ID,
+        role: "teacher",
+        active: true,
+        x: 382,
+        y: 202,
+        targetX: 382,
+        targetY: 202,
+        area: "classroom",
+        destinationArea: "classroom",
+        destinationSeat: false,
+        destinationSeatIndex: null,
+        route: [],
+        direction: "south",
+        action: "idle",
+        actionUntil: 0,
+        seated: false,
+        seatIndex: null,
+        pauseUntil: state.elapsed + 1,
+        nextActionAt: 1 + Math.random() * 4,
+        bubble: null,
+      };
+
+      state.agents = [...students, teacher];
+      setNewTarget(teacher, "classroom");
+      requestAnimationFrame(render);
+    }
+
+    init().catch((error) => {
+      document.body.innerHTML = `<pre style="padding:18px;color:#fca5a5">${error.stack || error}</pre>`;
+    });
+  </script>
+</body>
+</html>

@@ -2,9 +2,9 @@
 
 Given a flat config dict like:
     {
-        "adhd_inattentive.emotional.frustration": 0.21,
+        "adhd_inattentive.emotional.anxiety": 0.14,
         "adhd_inattentive.cognitive.att_bandwidth": -2,
-        "base_emotional.shame": 0.08,
+        "base_emotional.anxiety": 0.11,
         ...
     }
 apply it to a transient override of `PROFILE_DELTAS` + baselines for the
@@ -241,6 +241,12 @@ class DefaultEvaluator(EvaluatorProtocol):
     # OrchestratorV2 stays in place — existing callers see no
     # behavior change.
     teacher_noise_config: Any = None
+    # Track B-1 fix: rules to evaluate as a soft constraint penalty
+    # in the loss (separate from orchestrator's hard rejection
+    # path). These can include rules that reference frozen fields;
+    # check_constraints falls back to live PROFILE_DELTAS so they
+    # still produce a verdict.
+    soft_constraint_rules: list = field(default_factory=list)
 
     def evaluate(self, config: dict[str, Any]) -> tuple[Any, LossResult]:
         """Apply config, run N classes, compute combined loss.
@@ -280,6 +286,8 @@ class DefaultEvaluator(EvaluatorProtocol):
                 bundle,
                 naturalness_targets=self.naturalness_targets,
                 epidemiology_targets=self.epidemiology_targets,
+                config=config,
+                supported_rules=self.soft_constraint_rules or None,
             )
         return bundle, loss_result
 

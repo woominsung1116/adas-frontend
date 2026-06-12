@@ -160,7 +160,7 @@ async def websocket_endpoint(ws: WebSocket):
             for s in scenarios
         ],
         "class_config": {
-            "n_students": 20,
+            "n_students": 30,
             "adhd_prevalence": 0.09,
             "modes": ["classic", "multi", "v2"],
         },
@@ -284,7 +284,7 @@ async def _run_multi_student_session(ws, msg, profiles, scenarios):
         await _run_classic_session(ws, msg, profiles, scenarios)
         return
 
-    n_students = msg.get("n_students", 20)
+    n_students = msg.get("n_students", 30)
     adhd_prevalence = msg.get("adhd_prevalence", 0.09)
     max_turns_per_class = msg.get("max_turns", 50)
     seed = msg.get("seed", None)
@@ -565,7 +565,7 @@ async def _run_v2_session(ws, msg):
         })
         return
 
-    n_students = msg.get("n_students", 20)
+    n_students = msg.get("n_students", 30)
     seed = msg.get("seed", None)
 
     # Speed / pause control state

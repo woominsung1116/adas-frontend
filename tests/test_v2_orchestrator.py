@@ -230,3 +230,36 @@ def test_trimming_across_classes():
     assert len(log._class_events[2]) == 2
     # Global should have 3 + 2 = 5
     assert len(log._events) == 5
+
+# ---------------------------------------------------------------------------
+# Phase 5 relapse detector: managed=False guard
+# ---------------------------------------------------------------------------
+
+
+def test_relapse_detector_ignores_unmanaged_students():
+    """Phase 5 relapse detector should NOT record events for unmanaged students.
+
+    We run a short simulation and verify that relapse_events lists stay empty
+    for students that are identified but never set to managed=True.
+    """
+    # Use a very short class that skips past care_end quickly.
+    phase = PhaseConfig(
+        observation_end=2,
+        screening_end=4,
+        identification_end=6,
+        care_end=8,
+    )
+    orch = OrchestratorV2(n_students=3, max_classes=1, seed=0, phase_config=phase)
+    orch.classroom.MAX_TURNS = 20
+
+    # Force all students into _stream_identified but leave managed=False
+    events = list(orch.stream_class())
+
+    for sid, track in orch._stream_tracks.items():
+        if sid in orch._stream_identified:
+            student = orch.classroom.get_student(sid)
+            if student is not None and not student.managed:
+                # Must have zero relapse events since managed was never True
+                assert track.relapse_events == [], (
+                    f"Student {sid} (managed=False) should have no relapse events"
+                )

@@ -38,6 +38,7 @@ reward:
   fast_threshold: 5
 
 llm:
+  # backend: codex_cli | claude_cli | local_llm | mock
   backend: codex_cli
   model: gpt-5.4
   command: codex
@@ -46,6 +47,12 @@ llm:
   cache_dir: .cache/responses
   retry_attempts: 3
   retry_delay: 2.0
+
+  # local_llm-specific settings (used when backend: local_llm)
+  # base_url: http://localhost:11434   # Ollama default
+  # model: qwen2.5:7b                  # or llama3:8b, mistral:7b, etc.
+  # temperature: 0.0
+  # max_tokens: 1024
 
 evaluation:
   n_eval_episodes: 100

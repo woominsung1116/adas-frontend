@@ -358,6 +358,15 @@ def build_default_autoresearch_setup(
     # take it directly, but DefaultEvaluator has the field)
     evaluator.n_students = n_students
 
+    # Track B-1: wire ALL supported_rules (including non-tunable) to the
+    # evaluator's soft-constraint path. The orchestrator's hard rejection
+    # path only sees `enforceable_rules`; the soft path sees everything
+    # parseable and adds a small per-violation penalty to total loss.
+    if enforce_constraints:
+        evaluator.soft_constraint_rules = list(supported_rules)
+    else:
+        evaluator.soft_constraint_rules = []
+
     # Assemble orchestrator
     if results_dir is None:
         results_dir_path = Path(".harness")

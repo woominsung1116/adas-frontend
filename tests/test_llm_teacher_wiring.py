@@ -91,12 +91,16 @@ class TestPromptIncludesMemoryContext:
             TeacherAction(action_type="class_instruction")
         )
 
-        # Call LLM decision at turn 50 (Phase 1)
+        # v9 phase-free: prompt should NOT contain "Phase N" labels,
+        # only the turn count, and an instruction for self-directed
+        # strategy selection.
         action = orch._decide_action_llm(obs, turn=50)
 
         prompt = backend.last_prompt
-        assert "Phase 1" in prompt
-        assert "관찰" in prompt
+        assert "Phase 1" not in prompt
+        assert "Phase 3" not in prompt
+        assert "진행: turn 50/950" in prompt
+        assert "스스로 결정" in prompt
         assert backend.generate_raw_called
 
     def test_prompt_contains_experience_base(self):
@@ -223,15 +227,58 @@ class TestParseLLMResponse:
         assert action.strategy == "redirect_attention"  # fallback strategy
 
     def test_parse_identify_adhd(self):
+        """v9 phase-free: identify_adhd accepted at any turn when memory confidence >= 0.90."""
+        from unittest.mock import patch
         orch = self._orch()
         raw = json.dumps({
             "action_type": "identify_adhd",
             "student_id": "s_5",
             "reasoning": "consistent seat-leaving and blurting over 50 turns",
         })
-        action = orch._parse_llm_response(raw)
+        # v9: turn no longer gates identify_adhd; only confidence gate
+        # in memory.identify_adhd() applies. We still set _stream_turn
+        # for completeness, but the value is not enforced anymore.
+        orch._stream_turn = 350
+        with patch.object(orch.memory, "identify_adhd",
+                          return_value=(True, 0.9, "high confidence")):
+            action = orch._parse_llm_response(raw)
         assert action.action_type == "identify_adhd"
         assert action.student_id == "s_5"
+
+    def test_parse_identify_adhd_allowed_any_turn_when_high_confidence(self):
+        """v9 phase-free: identify_adhd allowed at any turn when memory
+        confidence >= 0.90. Replaces the v8 before-Phase-3 gate test.
+        """
+        from unittest.mock import patch
+        orch = self._orch()
+        raw = json.dumps({
+            "action_type": "identify_adhd",
+            "student_id": "s_5",
+            "reasoning": "case-base match",
+        })
+        # turn 100 was rejected in v8; in v9 should pass when memory
+        # backs it with sufficient confidence.
+        orch._stream_turn = 100
+        with patch.object(orch.memory, "identify_adhd",
+                          return_value=(True, 0.95, "case-base match")):
+            action = orch._parse_llm_response(raw)
+        assert action.action_type == "identify_adhd"
+        assert action.student_id == "s_5"
+
+    def test_parse_identify_adhd_rejected_low_confidence(self):
+        """identify_adhd is rejected when memory confidence < 0.90."""
+        from unittest.mock import patch
+        orch = self._orch()
+        raw = json.dumps({
+            "action_type": "identify_adhd",
+            "student_id": "s_5",
+            "reasoning": "borderline",
+        })
+        orch._stream_turn = 350
+        with patch.object(orch.memory, "identify_adhd",
+                          return_value=(True, 0.6, "low confidence")):
+            action = orch._parse_llm_response(raw)
+        assert action.action_type == "observe"
 
 
 class TestFallbackOnError:

@@ -24,9 +24,18 @@ class ResponseCache:
         key = self._make_key(prompt, context)
         path = os.path.join(self.cache_dir, f"{key}.json")
         if os.path.exists(path):
-            self._hits += 1
-            with open(path, "r") as f:
-                return json.load(f)["response"]
+            try:
+                with open(path, "r") as f:
+                    data = json.load(f)
+                self._hits += 1
+                return data["response"]
+            except (json.JSONDecodeError, KeyError, OSError):
+                # Corrupt or truncated cache file (e.g., from a crashed
+                # writer). Treat as a miss so the long-running experiment
+                # never dies from a stale half-written entry; the caller
+                # will recompute and overwrite.
+                self._misses += 1
+                return None
         self._misses += 1
         return None
 

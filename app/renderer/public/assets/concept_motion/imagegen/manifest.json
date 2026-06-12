@@ -1,0 +1,146 @@
+{
+  "source": "concept_motion_sheet_transparent.png",
+  "frame_width": 192,
+  "frame_height": 192,
+  "frames_per_character": 6,
+  "motions": [
+    "idle",
+    "walk_a",
+    "walk_b",
+    "talk",
+    "fidget_anxious",
+    "raise_hand"
+  ],
+  "characters": [
+    {
+      "id": "concept_01_boy_uniform",
+      "sheet": "sheets/concept_01_boy_uniform_motion.png",
+      "still": "characters/concept_01_boy_uniform.png",
+      "direction_sheet": "directions/concept_01_boy_uniform_directions.png",
+      "direction_walk_sheet": "walk_directions/concept_01_boy_uniform_walk_directions.png",
+      "seated_sheet": "seated/concept_01_boy_uniform_seated.png"
+    },
+    {
+      "id": "concept_02_girl_sailor",
+      "sheet": "sheets/concept_02_girl_sailor_motion.png",
+      "still": "characters/concept_02_girl_sailor.png",
+      "direction_sheet": "directions/concept_02_girl_sailor_directions.png",
+      "direction_walk_sheet": "walk_directions/concept_02_girl_sailor_walk_directions.png",
+      "seated_sheet": "seated/concept_02_girl_sailor_seated.png"
+    },
+    {
+      "id": "concept_03_boy_blazer",
+      "sheet": "sheets/concept_03_boy_blazer_motion.png",
+      "still": "characters/concept_03_boy_blazer.png",
+      "direction_sheet": "directions/concept_03_boy_blazer_directions.png",
+      "direction_walk_sheet": "walk_directions/concept_03_boy_blazer_walk_directions.png",
+      "seated_sheet": "seated/concept_03_boy_blazer_seated.png"
+    },
+    {
+      "id": "concept_04_girl_blonde",
+      "sheet": "sheets/concept_04_girl_blonde_motion.png",
+      "still": "characters/concept_04_girl_blonde.png",
+      "direction_sheet": "directions/concept_04_girl_blonde_directions.png",
+      "direction_walk_sheet": "walk_directions/concept_04_girl_blonde_walk_directions.png",
+      "seated_sheet": "seated/concept_04_girl_blonde_seated.png"
+    },
+    {
+      "id": "concept_05_teacher",
+      "sheet": "sheets/concept_05_teacher_motion.png",
+      "still": "characters/concept_05_teacher.png",
+      "direction_sheet": "directions/concept_05_teacher_directions.png",
+      "direction_walk_sheet": "walk_directions/concept_05_teacher_walk_directions.png",
+      "seated_sheet": "seated/concept_05_teacher_seated.png"
+    },
+    {
+      "id": "concept_06_principal",
+      "sheet": "sheets/concept_06_principal_motion.png",
+      "still": "characters/concept_06_principal.png",
+      "direction_sheet": "directions/concept_06_principal_directions.png",
+      "direction_walk_sheet": "walk_directions/concept_06_principal_walk_directions.png",
+      "seated_sheet": "seated/concept_06_principal_seated.png"
+    },
+    {
+      "id": "concept_07_counselor",
+      "sheet": "sheets/concept_07_counselor_motion.png",
+      "still": "characters/concept_07_counselor.png",
+      "direction_sheet": "directions/concept_07_counselor_directions.png",
+      "direction_walk_sheet": "walk_directions/concept_07_counselor_walk_directions.png",
+      "seated_sheet": "seated/concept_07_counselor_seated.png"
+    },
+    {
+      "id": "concept_08_nurse",
+      "sheet": "sheets/concept_08_nurse_motion.png",
+      "still": "characters/concept_08_nurse.png",
+      "direction_sheet": "directions/concept_08_nurse_directions.png",
+      "direction_walk_sheet": "walk_directions/concept_08_nurse_walk_directions.png",
+      "seated_sheet": "seated/concept_08_nurse_seated.png"
+    },
+    {
+      "id": "concept_09_janitor",
+      "sheet": "sheets/concept_09_janitor_motion.png",
+      "still": "characters/concept_09_janitor.png",
+      "direction_sheet": "directions/concept_09_janitor_directions.png",
+      "direction_walk_sheet": "walk_directions/concept_09_janitor_walk_directions.png",
+      "seated_sheet": "seated/concept_09_janitor_seated.png"
+    },
+    {
+      "id": "concept_10_girl_glasses",
+      "sheet": "sheets/concept_10_girl_glasses_motion.png",
+      "still": "characters/concept_10_girl_glasses.png",
+      "direction_sheet": "directions/concept_10_girl_glasses_directions.png",
+      "direction_walk_sheet": "walk_directions/concept_10_girl_glasses_walk_directions.png",
+      "seated_sheet": "seated/concept_10_girl_glasses_seated.png"
+    },
+    {
+      "id": "concept_11_sash_student",
+      "sheet": "sheets/concept_11_sash_student_motion.png",
+      "still": "characters/concept_11_sash_student.png",
+      "direction_sheet": "directions/concept_11_sash_student_directions.png",
+      "direction_walk_sheet": "walk_directions/concept_11_sash_student_walk_directions.png",
+      "seated_sheet": "seated/concept_11_sash_student_seated.png"
+    },
+    {
+      "id": "concept_12_pe_student",
+      "sheet": "sheets/concept_12_pe_student_motion.png",
+      "still": "characters/concept_12_pe_student.png",
+      "direction_sheet": "directions/concept_12_pe_student_directions.png",
+      "direction_walk_sheet": "walk_directions/concept_12_pe_student_walk_directions.png",
+      "seated_sheet": "seated/concept_12_pe_student_seated.png"
+    }
+  ],
+  "directions": [
+    "south",
+    "west",
+    "east",
+    "north"
+  ],
+  "direction_walk_frames": [
+    "south_a",
+    "south_b",
+    "west_a",
+    "west_b",
+    "east_a",
+    "east_b",
+    "north_a",
+    "north_b"
+  ],
+  "seated_frames": [
+    "front",
+    "back",
+    "raise_hand",
+    "fidget"
+  ],
+  "door_frames": [
+    "closed",
+    "slightly_open",
+    "half_open",
+    "mostly_open",
+    "open"
+  ],
+  "doors": {
+    "classroom": "doors/classroom_door.png",
+    "office": "doors/office_door.png",
+    "entrance": "doors/entrance_door.png"
+  }
+}

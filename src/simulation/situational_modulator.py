@@ -44,11 +44,11 @@ class ModulationVector:
     the SituationalModulator class combines them additively.
     """
 
-    # Global emotion shifts (applied to all students)
+    # Global emotion shifts (applied to all students).
+    # NOTE: only anxiety/excitement remain after the 8→3 student-emotion
+    # reduction; frustration/loneliness channels were removed.
     global_anxiety: float = 0.0
-    global_frustration: float = 0.0
     global_excitement: float = 0.0
-    global_loneliness: float = 0.0
 
     # Global cognitive shifts
     global_attention: float = 0.0         # +/- to observable attention
@@ -74,9 +74,7 @@ class ModulationVector:
         """Additive combination of two modulation vectors."""
         return ModulationVector(
             global_anxiety=self.global_anxiety + other.global_anxiety,
-            global_frustration=self.global_frustration + other.global_frustration,
             global_excitement=self.global_excitement + other.global_excitement,
-            global_loneliness=self.global_loneliness + other.global_loneliness,
             global_attention=self.global_attention + other.global_attention,
             global_compliance=self.global_compliance + other.global_compliance,
             class_stress=max(self.class_stress, other.class_stress),  # max, not sum
@@ -126,7 +124,6 @@ def academic_cycle_modulation(turn: int, total_turns: int = 950) -> ModulationVe
     # Late-semester fatigue (end of semester 1 and 2)
     elif 400 <= turn <= 475 or 700 <= turn <= 850:
         v.global_excitement = -0.08
-        v.global_loneliness = 0.03
         v.global_attention = -0.05
         v.class_stress = 0.3
 
@@ -234,7 +231,6 @@ def hot_weather(intensity: float = 0.0) -> ModulationVector:
     v = ModulationVector()
     if intensity > 0:
         v.global_attention = -0.05 * intensity
-        v.global_frustration = 0.03 * intensity
         v.global_excitement = -0.04 * intensity
     return v
 

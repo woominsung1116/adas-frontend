@@ -17,6 +17,7 @@ Korean epidemiological data sources:
 """
 from __future__ import annotations
 
+import os
 import random
 from dataclasses import dataclass, field
 from typing import Any
@@ -238,6 +239,133 @@ _STUDENT_VISIBLE_DISRUPTIVE_BEHAVIORS: frozenset[str] = frozenset({
 })
 
 
+#: Step ① (inattentive redesign): low-salience but observable
+#: inattentive behavior set, defined in parallel with the disruptive
+#: set above. These are the behavioral manifestations of inattention
+#: (K-ARS inattention items 1/3/5/7/9/11/13/15/17) that the teacher
+#: CAN see if looking — unlike the latent ``attention`` scalar. They
+#: are deliberately low-salience (a quiet, daydreaming student does
+#: not announce themselves), so salience-differentiated weighting is
+#: handled later in Step ②; here they are simply made observable so
+#: ``_visible_behaviors`` lets them through to the teacher path.
+_OBSERVABLE_INATTENTIVE_BEHAVIORS: frozenset[str] = frozenset({
+    "staring_blankly",
+    "off_task_gaze",
+    "not_following_instructions",
+    "slow_to_start",
+    "incomplete_work",
+    "loses_place",
+    "daydreaming",
+    "doesnt_respond_when_called",
+    # Step ① 확장 (전환 곤란 채널): mid-salience behaviors emitted only on
+    # a transition turn (subject change / activity→class / engagement
+    # high→low). A student who fails to switch with the rest of the class
+    # is visible in that moment — the channel partially bypasses the
+    # "quiet student never noticed" problem. Maps into
+    # ``orchestrator_v2._BEHAVIOR_TO_DSM5`` (inattention_4/5/9). The
+    # post-distraction ``slow_to_refocus`` recovery signal is included
+    # here so it survives ``_visible_behaviors`` as well.
+    "still_on_previous_task",
+    "didnt_prepare_materials",
+    "slow_to_transition",
+    "lost_during_move",
+    "slow_to_refocus",
+})
+
+
+#: Step ② (부주의형 재설계, redesign.md): teaching-method-differentiated
+#: discovery of quiet/inattentive students. The teacher chooses a teaching
+#: mode each turn; the mode sets the *probability* that a student's
+#: low-salience inattentive behavior actually surfaces to the teacher this
+#: turn. This makes discovery probabilistic/incidental ("놓치기 쉬움" stays
+#: naturally true) and is the concrete mechanism that distinguishes the agent
+#: from a one-shot ADHD-RS checklist: lecture-only teaching never reveals the
+#: quiet student (= snapshot-checklist baseline), while nomination / seatwork
+#: patrol / homework collection reveal them with rising probability.
+#:
+#: Modes (redesign.md Step ② table):
+#:   lecture          (설명/강의)      — 부주의 안 드러남 (baseline-like)
+#:   nomination       (지목 질문)      — 멍때리던 애가 들킴
+#:   seatwork_patrol  (자습+교사 순회) — 진도 안 나감/딴짓 보임
+#:   homework_collect (숙제·시험지 걷기) — 결과물(work-product)로 드러남
+_TEACHING_MODES: tuple[str, ...] = (
+    "lecture",
+    "nomination",
+    "seatwork_patrol",
+    "homework_collect",
+)
+
+#: Per-mode probability that a REAL-TIME inattentive behavior surfaces. Low
+#: for lecture (the quiet student is invisible) and homework_collect (the
+#: teacher is heads-down on papers, not watching the room); high for
+#: nomination / seatwork_patrol (the method actively exposes off-task /
+#: daydreaming students). Tunable via OMC_TEACHMODE_<MODE>_P.
+_TEACHING_MODE_INATTENTIVE_P: dict[str, float] = {
+    "lecture": 0.10,
+    "nomination": 0.70,
+    "seatwork_patrol": 0.65,
+    "homework_collect": 0.15,
+}
+
+#: The work-product channel (K-ARS inattention items 1/7/17): these surface
+#: through collected homework / tests, not real-time room watching. Under
+#: homework_collect they surface with high probability; under every other mode
+#: they are gated by ``_TEACHING_MODE_INATTENTIVE_P`` like any other
+#: inattentive behavior. Subset of ``_OBSERVABLE_INATTENTIVE_BEHAVIORS``.
+_WORK_PRODUCT_BEHAVIORS: frozenset[str] = frozenset({
+    "incomplete_work",
+    "not_following_instructions",
+    "loses_place",
+})
+
+#: Probability that a work-product behavior surfaces while collecting
+#: homework/tests. Tunable via OMC_TEACHMODE_WORKPRODUCT_P.
+_WORK_PRODUCT_COLLECT_P: float = 0.85
+
+
+def _teaching_mode_inattentive_p(mode: str | None) -> float:
+    """Probability that a real-time inattentive behavior surfaces under ``mode``.
+
+    Falls back to the lecture probability for unknown / ``None`` modes (the
+    conservative "teacher just lectured, saw nothing" default). Each mode is
+    overridable via ``OMC_TEACHMODE_<MODE>_P``.
+    """
+    key = str(mode or "lecture")
+    base = _TEACHING_MODE_INATTENTIVE_P.get(key, _TEACHING_MODE_INATTENTIVE_P["lecture"])
+    env_key = f"OMC_TEACHMODE_{key.upper()}_P"
+    raw = os.environ.get(env_key)
+    if raw is not None:
+        try:
+            return _clamp(float(raw))
+        except ValueError:
+            pass
+    return base
+
+
+#: Step ① 확장 (전환 곤란 채널): per-subject engagement tag used to detect
+#: the "흥미→지루" (engagement high→low) transition boundary. High-engagement
+#: subjects (pe / art / music) keep ADHD students engaged; the low-engagement
+#: academic block (korean / math / social / science / moral) is where the
+#: attentional drop on transition is sharpest. The high→low boundary is the
+#: 핵심 맥락의존 감별 단서: ADHD collapses on the boring switch while a
+#: globally-slowed depression profile does not differentiate.
+_SUBJECT_ENGAGEMENT: dict[str, str] = {
+    "pe": "high",
+    "art": "high",
+    "music": "high",
+    "korean": "low",
+    "math": "low",
+    "social": "low",
+    "science": "low",
+    "moral": "low",
+}
+
+
+def _subject_engagement(subject: str | None) -> str:
+    """Return the coarse engagement tag for a subject (default ``"low"``)."""
+    return _SUBJECT_ENGAGEMENT.get(str(subject or ""), "low")
+
+
 #: Phase 6 slice 17: fraction cut points for the behavior-derived
 #: student-side class mood ladder. Thresholds are conservative —
 #: the cognitive path only reacts to ``"chaotic"`` today, and the
@@ -324,6 +452,22 @@ class TeacherAction:
     student_id: str | None = None
     strategy: str | None = None
     reasoning: str = ""
+    # Slice 22: set True by the memory-aware early identification
+    # Used
+    # downstream to tag ``_StudentTrack`` / ``IdentificationReport``
+    # so multi-class growth experiments can filter early-path vs
+    # phase-3-path identifications without string-parsing the
+    # reasoning field. Default False for every other action.
+    is_early_identification: bool = False
+    # Step ② (부주의형 재설계, redesign.md): the teaching method the teacher
+    # uses this turn. One of ``_TEACHING_MODES`` (lecture / nomination /
+    # seatwork_patrol / homework_collect) or ``None``. When ``None`` the
+    # environment samples a mode itself (teacher-strategy proxy) so the
+    # behavior holds for both the rule-based and LLM teacher paths. The mode
+    # governs the *probability* that low-salience inattentive behaviors
+    # actually surface to the teacher — making discovery of quiet students
+    # probabilistic/incidental rather than guaranteed.
+    teaching_mode: str | None = None
 
 
 @dataclass
@@ -336,6 +480,8 @@ class StudentSummary:
     is_managed: bool
     seat_row: int
     seat_col: int
+    # v17: Optional narrative from StudentLLM (empty when not used)
+    narrative: str = ""
 
 
 @dataclass
@@ -723,6 +869,10 @@ class ClassroomV2:
         self._situational_modulator = None
         self._enable_situational_modulation: bool = True
         self._last_modulation = None  # cached for observation building
+        # Step ② (부주의형 재설계): teaching mode resolved per step(). Defaults
+        # to the conservative lecture mode (quiet students invisible) until a
+        # step sets it.
+        self._current_teaching_mode: str = "lecture"
 
     # ------------------------------------------------------------------
     # Public API
@@ -755,6 +905,11 @@ class ClassroomV2:
             self.set_archetype(name)
 
         self.students = self._generate_students()
+        self._seat_cols = 5
+        self._seat_positions: dict[str, tuple[int, int]] = {
+            s.student_id: divmod(i, self._seat_cols)
+            for i, s in enumerate(self.students)
+        }
         self._apply_archetype_effects()
         self.relationships = self._generate_relationships()
         self.daily_schedule = self._generate_daily_schedule()
@@ -788,9 +943,7 @@ class ClassroomV2:
             "attention": student.state.get("attention"),
             "compliance": student.state.get("compliance"),
             "anxiety": student.emotions.anxiety,
-            "frustration": student.emotions.frustration,
             "excitement": student.emotions.excitement,
-            "loneliness": student.emotions.loneliness,
         }
 
     def _reapply_transient_modulation(
@@ -815,7 +968,7 @@ class ClassroomV2:
             student.state["compliance"] = max(0.0, min(1.0, baseline["compliance"] + delta))
 
         # Emotions (dataclass attributes — always present)
-        for field in ("anxiety", "frustration", "excitement", "loneliness"):
+        for field in ("anxiety", "excitement"):
             current = getattr(student.emotions, field)
             delta = current - modulated[field]
             new_val = max(0.0, min(1.0, baseline[field] + delta))
@@ -917,15 +1070,9 @@ class ClassroomV2:
             if modulation.global_anxiety != 0:
                 student.emotions.anxiety = max(0.0, min(1.0,
                     student.emotions.anxiety + modulation.global_anxiety * amp))
-            if modulation.global_frustration != 0:
-                student.emotions.frustration = max(0.0, min(1.0,
-                    student.emotions.frustration + modulation.global_frustration * amp))
             if modulation.global_excitement != 0:
                 student.emotions.excitement = max(0.0, min(1.0,
                     student.emotions.excitement + modulation.global_excitement))
-            if modulation.global_loneliness != 0:
-                student.emotions.loneliness = max(0.0, min(1.0,
-                    student.emotions.loneliness + modulation.global_loneliness))
 
     def step(
         self, teacher_action: TeacherAction
@@ -946,6 +1093,18 @@ class ClassroomV2:
         """
         self.turn += 1
         self._advance_time()
+
+        # Step ② (부주의형 재설계): resolve the teaching mode for this turn.
+        # If the teacher action carries an explicit mode (LLM/rule path may set
+        # it) use it; otherwise sample one as a teacher-strategy proxy so the
+        # probabilistic-discovery behavior holds regardless of teacher backend.
+        # Stored on the env so ``_visible_behaviors`` (called from
+        # ``_make_observation`` below) can gate inattentive surfacing.
+        self._current_teaching_mode = (
+            teacher_action.teaching_mode
+            if getattr(teacher_action, "teaching_mode", None) in _TEACHING_MODES
+            else self._rng.choice(_TEACHING_MODES)
+        )
 
         # Phase 0: Compute situational modulation for this turn (transient)
         modulator = self._get_situational_modulator()
@@ -1010,6 +1169,9 @@ class ClassroomV2:
             "location": self._current_location(),
             "interactions": interactions,
             "reward": reward,
+            # Step ② (부주의형 재설계): teaching mode used this turn (governs
+            # probabilistic surfacing of inattentive behaviors).
+            "teaching_mode": self._current_teaching_mode,
         }
         # Surface situational modulation status for downstream logging/UI
         if self._last_modulation is not None:
@@ -1064,6 +1226,65 @@ class ClassroomV2:
         if subject == "pe":
             return "playground"
         return "classroom"
+
+    def _previous_subject(self) -> str | None:
+        """Return the subject of the period immediately before the current one.
+
+        Returns ``None`` on the very first turn of the simulation (no prior
+        period exists). At a day boundary (period 1, turn > 1) the previous
+        subject is the LAST period of the day before; since ``daily_schedule``
+        is regenerated per day we cannot reconstruct yesterday's last subject,
+        so we conservatively return ``None`` there — the day boundary is
+        already a strong transition cue and is handled separately.
+        """
+        if self.turn <= 1:
+            return None
+        if self.period == 1:
+            # New-day boundary: previous day's schedule is no longer available.
+            return None
+        if not self.daily_schedule:
+            return None
+        prev_idx = (self.period - 2) % len(self.daily_schedule)
+        return self.daily_schedule[prev_idx]
+
+    def _transition_subtypes(self) -> list[str]:
+        """Step ① 확장: classify the period boundary into transition subtypes.
+
+        Returns a (possibly empty) list drawn from:
+          * ``"subject_change"`` — generic 과목변경 (current subject differs
+            from the previous period's subject, OR a new-day boundary).
+          * ``"activity_to_class"`` — 활동→수업: previous period was a
+            high-activity subject (pe / art / music) and the current one is
+            a structured academic period. Approximates the rest/PE → lesson
+            switch (there is no separate recess turn; pe/art/music periods
+            stand in for it per the design note).
+          * ``"engagement_drop"`` — 흥미→지루: previous subject tagged
+            ``"high"`` engagement and the current subject tagged ``"low"``.
+
+        The lists are not mutually exclusive (an activity→class switch is also
+        an engagement_drop); each subtype that applies is included so the
+        downstream penalty / emission can react to the strongest cue present.
+        """
+        subtypes: list[str] = []
+        current = self._current_subject()
+        # New-day boundary is itself a strong transition (hallway move).
+        if self.turn > 1 and self.period == 1:
+            subtypes.append("subject_change")
+            return subtypes
+        prev = self._previous_subject()
+        if prev is None:
+            return subtypes
+        if prev != current:
+            subtypes.append("subject_change")
+        _ACTIVITY_SUBJECTS = {"pe", "art", "music"}
+        if prev in _ACTIVITY_SUBJECTS and current not in _ACTIVITY_SUBJECTS:
+            subtypes.append("activity_to_class")
+        if (
+            _subject_engagement(prev) == "high"
+            and _subject_engagement(current) == "low"
+        ):
+            subtypes.append("engagement_drop")
+        return subtypes
 
     # ------------------------------------------------------------------
     # Student generation (Korean epidemiological distribution)
@@ -1138,20 +1359,20 @@ class ClassroomV2:
         # Each table must sum to 1.0.
         comorbidity_tables: dict[str, list[tuple[str, float]]] = {
             "adhd_combined": [
-                ("adhd_c_plus_odd",      0.35),
-                ("adhd_plus_depression", 0.10),
-                ("adhd_combined",        0.55),  # pure
+                ("adhd_c_plus_odd",      0.45),
+                ("adhd_plus_depression", 0.25),
+                ("adhd_combined",        0.30),  # pure (MTA1999/Jensen2001: comorbidity 65-75%)
             ],
             "adhd_hyperactive_impulsive": [
-                ("adhd_h_plus_odd",      0.30),
-                ("adhd_plus_depression", 0.10),
-                ("adhd_hyperactive_impulsive", 0.60),  # pure
+                ("adhd_h_plus_odd",      0.45),
+                ("adhd_plus_depression", 0.25),
+                ("adhd_hyperactive_impulsive", 0.30),  # pure
             ],
             "adhd_inattentive": [
-                ("adhd_i_plus_anxiety",  0.25),
-                ("adhd_i_plus_ld",       0.20),
-                ("adhd_plus_depression", 0.10),
-                ("adhd_inattentive",     0.45),  # pure
+                ("adhd_i_plus_anxiety",  0.30),
+                ("adhd_i_plus_ld",       0.25),
+                ("adhd_plus_depression", 0.15),
+                ("adhd_inattentive",     0.30),  # pure
             ],
         }
 
@@ -1442,6 +1663,7 @@ class ClassroomV2:
         # Only observable fields are included; latent emotional /
         # cognitive scalars from InteractionEvent are deliberately dropped.
         current_events = self._build_current_events_for_students(teacher_action)
+        seat_map = self._student_seat_map()
 
         try:
             return ClassroomContext(
@@ -1454,6 +1676,7 @@ class ClassroomV2:
                 class_mood=mood,
                 teacher_action=teacher_action.action_type,
                 teacher_target=teacher_action.student_id,
+                seat_map=seat_map,
             )
         except TypeError:
             # Fallback for stub ClassroomContext (accepts **kwargs)
@@ -1466,7 +1689,26 @@ class ClassroomV2:
                 location=self._current_location(),
                 teacher_action_type=teacher_action.action_type,
                 teacher_target=teacher_action.student_id,
+                seat_map=seat_map,
             )
+
+    def _student_seat_map(self) -> dict[str, tuple[int, int]]:
+        """Return the authoritative seat grid used by student-side vision filtering.
+
+        The mapping is snapshotted at session start from the enrollment
+        order, so transient reorderings of ``self.students`` (e.g. for
+        iteration, sorting, or per-turn shuffles) cannot desynchronize
+        a student's perceived position from the seat they were actually
+        assigned.
+        """
+        snapshot = getattr(self, "_seat_positions", None)
+        if snapshot:
+            return dict(snapshot)
+        cols = getattr(self, "_seat_cols", 5)
+        return {
+            student.student_id: divmod(i, cols)
+            for i, student in enumerate(self.students)
+        }
 
     def _derive_student_class_mood(self) -> str:
         """Phase 6 slice 17: behavior-derived student class mood.
@@ -1536,6 +1778,28 @@ class ClassroomV2:
         ``att_bandwidth`` filter on top of this.
         """
         events: list[dict[str, Any]] = []
+
+        # 0. Step ① 확장 (전환 곤란 채널): if this period boundary is a
+        # transition (과목변경 / 활동→수업 / 흥미→지루), emit a single
+        # class-wide transition event so every student's perceive loop can
+        # see it. ``actor="environment"`` + ``target="class"`` keeps it
+        # globally visible (no seat-grid gating). ``subtypes`` carries the
+        # classification list and ``from``/``to`` carry the subject pair so
+        # the student-side transition penalty (cognitive_agent) can react to
+        # the strongest applicable cue. Latent state is never leaked — the
+        # event only describes the public schedule change.
+        transition_subtypes = self._transition_subtypes()
+        if transition_subtypes:
+            events.append({
+                "actor": "environment",
+                "target": "class",
+                "action": "subject_transition",
+                "description": "class transitions to a new activity",
+                "type": "transition",
+                "subtypes": transition_subtypes,
+                "from": self._previous_subject() or "",
+                "to": self._current_subject(),
+            })
 
         # 1. Teacher action event — emitted only when the teacher
         # is doing something students could plausibly notice:
@@ -1770,10 +2034,13 @@ class ClassroomV2:
     ) -> ClassroomObservation:
         summaries: list[StudentSummary] = []
         detailed: list[DetailedObservation] = []
-        cols = 5
+        seat_positions = getattr(self, "_seat_positions", None) or {}
+        seat_cols = getattr(self, "_seat_cols", 5)
 
         for i, student in enumerate(self.students):
-            row, col = divmod(i, cols)
+            row, col = seat_positions.get(
+                student.student_id, divmod(i, seat_cols)
+            )
 
             # Phase 6 slice 19: observable-only StudentSummary.
             # High-visibility behaviors first — the helper is now
@@ -1893,7 +2160,31 @@ class ClassroomV2:
             "running_in_classroom", "fidgeting", "emotional_outburst",
         }
         behaviors = getattr(student, "exhibited_behaviors", [])
-        return [b for b in behaviors if b in high_vis]
+
+        # Step ① (inattentive redesign): inattentive behaviors are observable
+        # too. Step ② now applies salience differentiation HERE: high-vis
+        # disruptive behaviors always surface, but each low-salience
+        # inattentive behavior surfaces only with a probability set by the
+        # current teaching mode. This makes discovery of withdrawn/inattentive
+        # students probabilistic/incidental rather than guaranteed — lecture
+        # mode rarely reveals them (approximates the checklist baseline), while
+        # nomination / seatwork patrol / homework collection raise the odds.
+        mode = getattr(self, "_current_teaching_mode", "lecture")
+        realtime_p = _teaching_mode_inattentive_p(mode)
+        out: list[str] = []
+        for b in behaviors:
+            if b in high_vis:
+                out.append(b)
+            elif b in _OBSERVABLE_INATTENTIVE_BEHAVIORS:
+                # Work-product behaviors surface strongly while collecting
+                # homework/tests; otherwise they share the real-time mode prob.
+                if mode == "homework_collect" and b in _WORK_PRODUCT_BEHAVIORS:
+                    p = _WORK_PRODUCT_COLLECT_P
+                else:
+                    p = realtime_p
+                if self._rng.random() < p:
+                    out.append(b)
+        return out
 
 
 

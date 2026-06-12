@@ -70,6 +70,16 @@ _BEHAVIOR_TO_DSM5: dict[str, str] = {
     "daydreaming":                 "inattention_2",
     "loses_materials":             "inattention_7",
     "off-task":                    "inattention_2",
+    # Step ① (inattentive redesign): observable inattentive behavior
+    # strings emitted by cognitive_agent. Mirrors orchestrator_v2;
+    # raw env strings (track.all_behaviors is untranslated here too).
+    "staring_blankly":             "inattention_2",
+    "off_task_gaze":               "inattention_2",
+    "not_following_instructions":  "inattention_4",
+    "slow_to_start":               "inattention_6",
+    "incomplete_work":             "inattention_4",
+    "loses_place":                 "inattention_7",
+    "doesnt_respond_when_called":  "inattention_3",   # NEW criterion
     # Hyperactivity / Impulsivity
     "seat-leaving":                "hyperactivity_2",
     "out_of_seat":                 "hyperactivity_2",

@@ -135,6 +135,24 @@ class IdentificationReport:
     ground_truth_subtype: Optional[str] = None
     is_correct: Optional[bool] = None
 
+    # Slice 22: structured early-identification metadata.
+    # Populated by ``OrchestratorV2._build_report`` based on whether
+    # the emitting ``TeacherAction`` carried
+    # ``is_early_identification=True`` (i.e. came through the Slice
+    # 21 memory-aware bypass). Defaults preserve full backward
+    # compatibility for the normal Phase 3+ identification path,
+    # which leaves ``early_identification`` at False,
+    # ``early_identification_turn`` at None, and
+    # ``identification_path`` at None (or ``"phase3"`` when the
+    # orchestrator tags it explicitly).
+    early_identification: bool = False
+    early_identification_turn: Optional[int] = None
+    identification_path: Optional[str] = None  # "early" | "phase3" | None
+
+    # Slice 24: suspicion-to-identification delta.
+    first_suspicion_turn: Optional[int] = None
+    suspicion_to_identification_delta: Optional[int] = None
+
     def __post_init__(self) -> None:
         if self.identified_subtype not in VALID_SUBTYPES:
             raise ValueError(

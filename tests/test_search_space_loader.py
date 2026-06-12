@@ -157,21 +157,21 @@ def test_live_simulator_default_fallback(tmp_path):
     from src.simulation import cognitive_agent as ca
 
     # Pick a field whose live value is known
-    live_shame = ca.BASE_EMOTIONAL["shame"]
+    live_anxiety = ca.BASE_EMOTIONAL["anxiety"]
 
     fake_yaml = tmp_path / "live_fallback.yaml"
     fake_yaml.write_text(
         """
 base_emotional:
-  shame:
+  anxiety:
     range: [0.0, 1.0]
     # no explicit default
 """,
         encoding="utf-8",
     )
     loaded = load_search_space(fake_yaml)
-    spec = [s for s in loaded.space.specs if s.name == "base_emotional.shame"][0]
-    assert spec.default == pytest.approx(live_shame)
+    spec = [s for s in loaded.space.specs if s.name == "base_emotional.anxiety"][0]
+    assert spec.default == pytest.approx(live_anxiety)
 
 
 def test_midpoint_fallback_when_no_live_value(tmp_path):

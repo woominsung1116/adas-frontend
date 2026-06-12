@@ -44,6 +44,52 @@ class ClassMetrics:
     adhd_fn: int = 0
     confounder_fp: int = 0               # normal students with confounding profiles wrongly identified
 
+    # Slice 23: class-level aggregation of the Slice 21/22 memory-aware
+    # early-identification path. Populated by
+    # ``OrchestratorV2._compile_class_result`` directly from the
+    # structured ``early_identification`` / ``identification_path``
+    # fields on each ``IdentificationReport`` — never by parsing the
+    # reasoning string. Defaults are 0 / 0.0 so a default run with
+    # These fields are kept as 0-stubs for downstream CSV/JSON schema
+    # compatibility after early identification was removed.
+    n_early_identifications: int = 0
+    avg_early_identification_turn: float = 0.0
+    early_identification_rate: float = 0.0
+    n_phase3_identifications: int = 0
+    avg_phase3_identification_turn: float = 0.0
+
+    # Slice 24: mean turns between first suspicion and identification.
+    # Only students with both a suspicion turn and an identification
+    # turn contribute. ``0.0`` when no valid deltas exist.
+    avg_suspicion_to_identification_delta: float = 0.0
+
+    # Slice 35: relapse detection metrics.
+    relapse_count: int = 0
+    relapse_recovery_count: int = 0
+    relapse_recovery_rate: float = 0.0
+    avg_relapse_duration: float = 0.0
+
+    # Step ③ (부주의형 중심 재설계): per-subtype identification breakdown so
+    # the headline metric — inattentive-subtype recall — can be tracked
+    # separately from the easy hyperactive/combined cases. ``*_tp`` counts
+    # correctly-identified ground-truth ADHD students of that subtype;
+    # ``*_total`` counts all ground-truth ADHD students of that subtype in
+    # the class. recall = tp / total.
+    inattentive_tp: int = 0
+    inattentive_total: int = 0
+    hyperactive_tp: int = 0
+    hyperactive_total: int = 0
+    combined_tp: int = 0
+    combined_total: int = 0
+
+    # Step ③: quiet (non-ADHD) distractor confusion. ``quiet_distractor_total``
+    # is the number of anxiety / depression / LD / gifted / sleep-deprived
+    # students present (the look-alikes the inattentive subtype must be told
+    # apart from); ``quiet_distractor_fp`` is how many of them were wrongly
+    # flagged as ADHD. Non-confusion precision = 1 - fp / total.
+    quiet_distractor_total: int = 0
+    quiet_distractor_fp: int = 0
+
 
 # ---------------------------------------------------------------------------
 # Core tracker
@@ -300,6 +346,53 @@ class GrowthTracker:
         return (f1_adhd + f1_normal + f1_confounder) / 3.0
 
     # ------------------------------------------------------------------
+    # Step ③ — 부주의형 중심 지표 (inattentive-subtype recall + quiet
+    # distractor non-confusion precision). These are the headline metrics
+    # for the redesign: the disruption-gated baseline structurally misses
+    # the quiet inattentive subtype, so inattentive recall is where the
+    # active-noticing + longitudinal agent should separate from baseline.
+    # ------------------------------------------------------------------
+
+    def subtype_recall(
+        self, subtype: str, class_id: Optional[int] = None,
+    ) -> float:
+        """Recall (sensitivity) for one ADHD subtype.
+
+        ``subtype`` is one of ``"inattentive"`` / ``"hyperactive"`` /
+        ``"combined"``. Returns ``tp / total`` aggregated across the selected
+        classes, or ``0.0`` when no ground-truth students of that subtype
+        exist.
+        """
+        records = self._select(class_id)
+        tp_attr = f"{subtype}_tp"
+        total_attr = f"{subtype}_total"
+        tp = sum(getattr(r, tp_attr, 0) for r in records)
+        total = sum(getattr(r, total_attr, 0) for r in records)
+        return tp / total if total > 0 else 0.0
+
+    def inattentive_recall(self, class_id: Optional[int] = None) -> float:
+        """Headline metric: recall for the inattentive ADHD subtype."""
+        return self.subtype_recall("inattentive", class_id)
+
+    def quiet_distractor_precision(
+        self, class_id: Optional[int] = None,
+    ) -> float:
+        """Non-confusion precision against quiet (non-ADHD) distractors.
+
+        Quiet distractors (anxiety / depression / LD / gifted / sleep
+        deprived) are the look-alikes the inattentive subtype must be told
+        apart from. Returns ``1 - fp / total`` — the fraction of quiet
+        distractors correctly NOT flagged as ADHD — or ``1.0`` when no quiet
+        distractors are present (vacuously non-confused).
+        """
+        records = self._select(class_id)
+        fp = sum(getattr(r, "quiet_distractor_fp", 0) for r in records)
+        total = sum(getattr(r, "quiet_distractor_total", 0) for r in records)
+        if total <= 0:
+            return 1.0
+        return 1.0 - (fp / total)
+
+    # ------------------------------------------------------------------
     # Growth curves (per-class time series)
     # ------------------------------------------------------------------
 
@@ -319,6 +412,7 @@ class GrowthTracker:
             "f1": [],
             "false_positive_rate": [],
             "identification_speed": [],
+            "suspicion_to_identification_delta": [],
             "behavior_improvement": [],
             "strategy_diversity": [],
             "care_efficiency": [],
@@ -340,6 +434,9 @@ class GrowthTracker:
             curves["behavior_improvement"].append(improvement)
             curves["strategy_diversity"].append(float(len(set(record.strategies_used))))
             curves["care_efficiency"].append(record.avg_care_turns)
+            curves["suspicion_to_identification_delta"].append(
+                record.avg_suspicion_to_identification_delta
+            )
 
         return curves
 
@@ -581,6 +678,21 @@ class GrowthTracker:
             "behavior_improvement",
             "strategy_diversity",
             "class_completion_turn",
+            "n_early_identifications",
+            "avg_early_identification_turn",
+            "early_identification_rate",
+            "n_phase3_identifications",
+            "avg_phase3_identification_turn",
+            "avg_suspicion_to_identification_delta",
+            "relapse_count",
+            "relapse_recovery_count",
+            "relapse_recovery_rate",
+            "avg_relapse_duration",
+            # Step ③ — 부주의형 subtype recall + quiet-distractor non-confusion.
+            "inattentive_recall",
+            "inattentive_tp",
+            "inattentive_total",
+            "distractor_precision",
         ]
         rows: list[dict] = []
         for i, record in enumerate(self.class_history):
@@ -603,6 +715,30 @@ class GrowthTracker:
                 "behavior_improvement": curves["behavior_improvement"][i],
                 "strategy_diversity": curves["strategy_diversity"][i],
                 "class_completion_turn": record.class_completion_turn,
+                "n_early_identifications": record.n_early_identifications,
+                "avg_early_identification_turn": record.avg_early_identification_turn,
+                "early_identification_rate": record.early_identification_rate,
+                "n_phase3_identifications": record.n_phase3_identifications,
+                "avg_phase3_identification_turn": record.avg_phase3_identification_turn,
+                "avg_suspicion_to_identification_delta": record.avg_suspicion_to_identification_delta,
+                "relapse_count": record.relapse_count,
+                "relapse_recovery_count": record.relapse_recovery_count,
+                "relapse_recovery_rate": record.relapse_recovery_rate,
+                "avg_relapse_duration": record.avg_relapse_duration,
+                # Step ③ — per-class inattentive recall (tp / total) and quiet
+                # distractor non-confusion precision (1 - fp / total; 1.0 when
+                # no quiet distractors are present, matching
+                # quiet_distractor_precision()).
+                "inattentive_recall": (
+                    record.inattentive_tp / record.inattentive_total
+                    if record.inattentive_total > 0 else 0.0
+                ),
+                "inattentive_tp": record.inattentive_tp,
+                "inattentive_total": record.inattentive_total,
+                "distractor_precision": (
+                    1.0 - (record.quiet_distractor_fp / record.quiet_distractor_total)
+                    if record.quiet_distractor_total > 0 else 1.0
+                ),
             })
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)

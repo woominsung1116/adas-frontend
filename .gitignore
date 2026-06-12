@@ -25,3 +25,8 @@ data/external/hyperaktiv/
 data/external/obf_psychiatric/
 data/external/scb_dataset/
 data/external/nsch/
+
+# OS / build junk
+.DS_Store
+**/.DS_Store
+.vite/

@@ -318,3 +318,94 @@ def test_memory_pipeline_is_deterministic_under_fixed_seed():
     b = run_one()
     assert a == b
     assert a  # non-empty
+
+# ---------------------------------------------------------------------------
+# NoMemory mode (disabled=True) tests
+# ---------------------------------------------------------------------------
+
+
+def test_disabled_memory_observe_and_retrieve_are_noop():
+    """TeacherMemory(disabled=True): observe + commit are no-ops; retrieve returns []."""
+    mem = TeacherMemory(disabled=True)
+    mem.new_class()
+    mem.observe("s1", ["seat-leaving", "talking-out-of-turn"])
+    idx = mem.commit_observation("s1", "positive")
+    assert idx == -1, "commit_observation should return -1 when disabled"
+    results = mem.retrieve_similar_cases(["seat-leaving"])
+    assert results == [], "retrieve_similar_cases should return [] when disabled"
+
+
+def test_disabled_memory_identify_adhd_uses_profile_only():
+    """TeacherMemory(disabled=True): identify_adhd still works for the rule-based
+    baseline path -- it falls back to the per-class profile's
+    adhd_indicator_score because cross-class Case Base / Experience Base
+    are disabled (case_votes empty, no principles)."""
+    mem = TeacherMemory(disabled=True)
+    mem.new_class()
+    # No observations yet: base_score=0, so confidence=0 and is_adhd=False
+    is_adhd, conf, reason = mem.identify_adhd("s1")
+    assert is_adhd is False
+    assert conf == 0.0
+    # The reasoning now reports the gating layer that blocked
+    # identification: with zero observations the n_obs gate trips
+    # before any confidence math runs.
+    assert "insufficient observations" in reason
+
+
+def test_disabled_memory_record_outcome_is_noop():
+    """TeacherMemory(disabled=True): record_outcome does not update metrics."""
+    mem = TeacherMemory(disabled=True)
+    mem.new_class()
+    mem.observe("s1", ["seat-leaving"])
+    mem.commit_observation("s1", "positive")
+    mem.record_outcome("s1", was_correct=True)
+    # Metrics should remain at 0 since disabled
+    assert mem._metrics.total_identifications == 0
+
+
+
+def test_cross_class_case_retrieval_finds_prior_records():
+    """Fix B regression: same student_id across different classes should
+    still be retrievable -- only (student_id, class_id) pairs are excluded."""
+    mem = TeacherMemory(disabled=False)
+    # Class 1: log S03 with a distinctive behavior pattern
+    mem.new_class()
+    for _ in range(5):
+        mem.observe("S03", ["seat-leaving", "blurting"])
+        mem.commit_observation("S03", "neutral")
+    assert len(mem.case_base._records) == 5
+    # Class 2: same student id, query for similar past cases
+    mem.new_class()
+    mem.observe("S03", ["seat-leaving", "blurting"])
+    similar = mem.retrieve_similar_cases(
+        ["seat-leaving", "blurting"], top_k=10, exclude_student_id="S03"
+    )
+    assert len(similar) > 0, "cross-class retrieval should now return matches"
+    # All retrieved records must be from class 1, never the current class 2
+    assert all(rec.class_id == 1 for _, rec in similar)
+
+
+def test_disabled_mode_observe_still_tracks_profile():
+    """Fix D regression: disabled mode should keep per-class profile tracking
+    so the rule-based baseline can compute adhd_indicator_score()."""
+    mem = TeacherMemory(disabled=True)
+    mem.new_class()
+    # Use behaviors from ALL_BEHAVIORS vocabulary
+    mem.observe("S01", ["seat-leaving", "blurting-answers", "easily-distracted"])
+    mem.observe("S01", ["seat-leaving", "incomplete-tasks"])
+    profile = mem._get_or_create_profile("S01")
+    n_obs = sum(profile.behavior_frequency_counts.values())
+    assert n_obs == 5, f"disabled mode should still record behaviors, got {n_obs}"
+    # adhd_indicator_score() should reflect the recorded behaviors
+    assert profile.adhd_indicator_score() > 0.0
+
+
+def test_disabled_mode_does_not_write_case_base():
+    """Fix D regression: disabled mode must NOT persist records to case base
+    (per-class profile is fine, but no cross-class accumulation)."""
+    mem = TeacherMemory(disabled=True)
+    mem.new_class()
+    mem.observe("S01", ["seat-leaving"])
+    idx = mem.commit_observation("S01", "neutral")
+    assert idx == -1, "commit_observation should be a no-op in disabled mode"
+    assert len(mem.case_base._records) == 0

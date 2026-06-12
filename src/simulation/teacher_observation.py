@@ -75,6 +75,28 @@ _OBSERVABLE_DISRUPTIVE_BEHAVIORS: frozenset[str] = frozenset({
 })
 
 
+#: Step ① (inattentive redesign): low-salience but observable
+#: inattentive behaviors (mirrors
+#: ``ClassroomV2._OBSERVABLE_INATTENTIVE_BEHAVIORS`` /
+#: ``cognitive_agent._OBSERVABLE_INATTENTIVE_BEHAVIORS``). A student
+#: whose visible behaviors include any of these — but no disruptive
+#: behavior — is observably inattentive and gets a behavior-derived
+#: ``profile_hint`` of ``"inattentive"``. These are real behavioral
+#: manifestations the teacher can see, distinct from the latent
+#: ``"seems_inattentive"`` sentinel, which is still scrubbed as a
+#: latent leak.
+_OBSERVABLE_INATTENTIVE_BEHAVIORS: frozenset[str] = frozenset({
+    "staring_blankly",
+    "off_task_gaze",
+    "not_following_instructions",
+    "slow_to_start",
+    "incomplete_work",
+    "loses_place",
+    "daydreaming",
+    "doesnt_respond_when_called",
+})
+
+
 #: Fields that describe latent student state and MUST NEVER appear in the
 #: keys of a serialized ``StudentObservation``. Enforced by
 #: ``test_teacher_observation`` via structural assertion.
@@ -683,6 +705,12 @@ def _derive_profile_hint(
         ``"identified_adhd"``. This is a teacher-side flag, not
         latent truth.
       * Any observable disruptive behavior → ``"disruptive"``.
+      * Otherwise, any observable inattentive behavior →
+        ``"inattentive"`` (Step ①). Disruptive takes precedence
+        because a noisy student dominates the teacher's snapshot
+        impression; inattentive is the low-salience fallback hint
+        derived from genuinely observable behavior strings (NOT the
+        scrubbed ``"seems_inattentive"`` latent sentinel).
       * Otherwise → ``"unknown"``. The teacher layer refuses to
         guess an inattentive / typical label from latent scalars.
 
@@ -695,6 +723,8 @@ def _derive_profile_hint(
         return "identified_adhd"
     if any(b in _OBSERVABLE_DISRUPTIVE_BEHAVIORS for b in visible_behaviors):
         return "disruptive"
+    if any(b in _OBSERVABLE_INATTENTIVE_BEHAVIORS for b in visible_behaviors):
+        return "inattentive"
     return "unknown"
 
 

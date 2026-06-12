@@ -38,7 +38,7 @@ class ParameterSpec:
     """One dimension of the autoresearch search space.
 
     Fields:
-      name: identifier (can be dotted path, e.g. 'adhd_inattentive.frustration')
+      name: identifier (can be dotted path, e.g. 'adhd_inattentive.anxiety')
       lo, hi: inclusive bounds from literature
       kind: 'float' | 'int' | 'choice'
       choices: only used when kind == 'choice'

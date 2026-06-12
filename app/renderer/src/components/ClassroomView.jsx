@@ -54,41 +54,50 @@ const AREAS = {
 // ── Student/teacher positions per area ───────────────────────────────────
 const AREA_POSITIONS = {
   classroom: {
+    // 30 desks — 5 columns × 6 rows, denser grid to fit 30 students.
+    // Smaller spacing (~62px) + reduced sprite size keeps them within the
+    // classroom floor of the reference background (x≈120-420, y≈160-500).
     desks: [
-      { x: 168, y: 210 }, { x: 248, y: 210 }, { x: 328, y: 190 },
-      { x: 140, y: 290 }, { x: 220, y: 290 }, { x: 300, y: 290 }, { x: 380, y: 290 },
-      { x: 140, y: 370 }, { x: 220, y: 370 }, { x: 300, y: 370 }, { x: 380, y: 370 },
-      { x: 140, y: 440 }, { x: 220, y: 440 }, { x: 300, y: 440 }, { x: 380, y: 440 },
-      { x: 168, y: 510 }, { x: 248, y: 510 }, { x: 328, y: 510 }, { x: 408, y: 510 },
-      { x: 248, y: 150 },
+      { x: 138, y: 168 }, { x: 200, y: 168 }, { x: 262, y: 168 }, { x: 324, y: 168 }, { x: 386, y: 168 },
+      { x: 138, y: 230 }, { x: 200, y: 230 }, { x: 262, y: 230 }, { x: 324, y: 230 }, { x: 386, y: 230 },
+      { x: 138, y: 292 }, { x: 200, y: 292 }, { x: 262, y: 292 }, { x: 324, y: 292 }, { x: 386, y: 292 },
+      { x: 138, y: 354 }, { x: 200, y: 354 }, { x: 262, y: 354 }, { x: 324, y: 354 }, { x: 386, y: 354 },
+      { x: 138, y: 416 }, { x: 200, y: 416 }, { x: 262, y: 416 }, { x: 324, y: 416 }, { x: 386, y: 416 },
+      { x: 138, y: 478 }, { x: 200, y: 478 }, { x: 262, y: 478 }, { x: 324, y: 478 }, { x: 386, y: 478 },
     ],
-    teacher: { x: 280, y: 130 },
+    teacher: { x: 280, y: 128 },
   },
   office: {
     seats: [{ x: 600, y: 280 }, { x: 680, y: 320 }],
     teacher: { x: 700, y: 240 },
   },
   hallway: {
+    // 32 slots (≥30) — 4 rows × 8 columns, no wrap for 30 students.
     path: [
-      { x: 100, y: 540 }, { x: 200, y: 540 }, { x: 300, y: 540 },
-      { x: 400, y: 540 }, { x: 500, y: 540 }, { x: 600, y: 540 },
-      { x: 150, y: 570 }, { x: 250, y: 570 }, { x: 350, y: 570 },
-      { x: 450, y: 570 }, { x: 550, y: 570 }, { x: 650, y: 570 },
-      { x: 100, y: 600 }, { x: 200, y: 600 }, { x: 300, y: 600 },
-      { x: 400, y: 600 }, { x: 500, y: 600 }, { x: 600, y: 600 },
-      { x: 700, y: 540 }, { x: 700, y: 600 },
+      { x: 80, y: 500 }, { x: 175, y: 500 }, { x: 270, y: 500 }, { x: 365, y: 500 },
+      { x: 460, y: 500 }, { x: 555, y: 500 }, { x: 650, y: 500 }, { x: 740, y: 500 },
+      { x: 80, y: 538 }, { x: 175, y: 538 }, { x: 270, y: 538 }, { x: 365, y: 538 },
+      { x: 460, y: 538 }, { x: 555, y: 538 }, { x: 650, y: 538 }, { x: 740, y: 538 },
+      { x: 80, y: 576 }, { x: 175, y: 576 }, { x: 270, y: 576 }, { x: 365, y: 576 },
+      { x: 460, y: 576 }, { x: 555, y: 576 }, { x: 650, y: 576 }, { x: 740, y: 576 },
+      { x: 80, y: 610 }, { x: 175, y: 610 }, { x: 270, y: 610 }, { x: 365, y: 610 },
+      { x: 460, y: 610 }, { x: 555, y: 610 }, { x: 650, y: 610 }, { x: 740, y: 610 },
     ],
-    teacher: { x: 400, y: 560 },
+    teacher: { x: 400, y: 555 },
   },
   playground: {
+    // 30 scattered positions across the playground band (y≈645-735).
     scattered: [
-      { x: 80, y: 660 }, { x: 180, y: 680 }, { x: 300, y: 650 }, { x: 420, y: 690 },
-      { x: 550, y: 660 }, { x: 650, y: 680 }, { x: 120, y: 720 }, { x: 250, y: 730 },
-      { x: 370, y: 710 }, { x: 500, y: 730 }, { x: 600, y: 710 }, { x: 700, y: 720 },
-      { x: 150, y: 670 }, { x: 350, y: 700 }, { x: 480, y: 670 }, { x: 620, y: 700 },
-      { x: 200, y: 700 }, { x: 440, y: 720 }, { x: 560, y: 690 }, { x: 680, y: 660 },
+      { x: 70, y: 655 }, { x: 160, y: 670 }, { x: 250, y: 650 }, { x: 340, y: 668 },
+      { x: 430, y: 652 }, { x: 520, y: 670 }, { x: 610, y: 650 }, { x: 700, y: 668 },
+      { x: 110, y: 690 }, { x: 200, y: 700 }, { x: 290, y: 688 }, { x: 380, y: 702 },
+      { x: 470, y: 690 }, { x: 560, y: 700 }, { x: 650, y: 688 }, { x: 740, y: 700 },
+      { x: 70, y: 722 }, { x: 160, y: 730 }, { x: 250, y: 720 }, { x: 340, y: 732 },
+      { x: 430, y: 722 }, { x: 520, y: 730 }, { x: 610, y: 720 }, { x: 700, y: 730 },
+      { x: 120, y: 660 }, { x: 300, y: 712 }, { x: 490, y: 660 }, { x: 580, y: 712 },
+      { x: 380, y: 660 }, { x: 660, y: 705 },
     ],
-    teacher: { x: 400, y: 680 },
+    teacher: { x: 400, y: 685 },
   },
 };
 
@@ -115,6 +124,16 @@ const CHARACTER_PROFILES = [
   { id: "S18", hair: 0x554411, shirt: 0xbb8844 },
   { id: "S19", hair: 0x333344, shirt: 0x5577bb },
   { id: "S20", hair: 0x664433, shirt: 0x44aa88 },
+  { id: "S21", hair: 0x443322, shirt: 0x6699aa },
+  { id: "S22", hair: 0x665544, shirt: 0xaa6655 },
+  { id: "S23", hair: 0x332244, shirt: 0x559977 },
+  { id: "S24", hair: 0x554433, shirt: 0xbb7755 },
+  { id: "S25", hair: 0x221133, shirt: 0x5588aa },
+  { id: "S26", hair: 0x664422, shirt: 0x77aa66 },
+  { id: "S27", hair: 0x443355, shirt: 0xaa5566 },
+  { id: "S28", hair: 0x554422, shirt: 0x6688aa },
+  { id: "S29", hair: 0x332233, shirt: 0x88aa66 },
+  { id: "S30", hair: 0x665533, shirt: 0xbb7744 },
 ];
 
 // ── Derive active area from scenario + action ────────────────────────────
@@ -144,7 +163,7 @@ function studentColor(student) {
 
 // ── Draw a detailed pixel-art character ──────────────────────────────────
 function drawCharacter(g, x, y, hairColor, shirtColor, facing, frame, isTeacher) {
-  const S = isTeacher ? 2.8 : 2.2;  // base pixel size
+  const S = isTeacher ? 2.2 : 1.7;  // base pixel size (shrunk for 30-student density)
 
   // Shadow
   g.fillStyle(0x000000, 0.25);
@@ -287,13 +306,32 @@ class UnifiedSchoolScene extends Phaser.Scene {
   }
 
   preload() {
-    this.load.image("classroom", "/assets/classroom_bg.png");
+    this.load.image("classroom", "/assets/concept_motion/imagegen/school_background_imagegen.png");
     this.load.image("playground", "/assets/playground_bg.png");
+
+    // motion sheets (5 characters × 6 frames each, 192x192 per frame)
+    this.load.spritesheet("char_01", "/assets/concept_motion/imagegen/sheets/concept_01_boy_uniform_motion.png", { frameWidth: 192, frameHeight: 192 });
+    this.load.spritesheet("char_02", "/assets/concept_motion/imagegen/sheets/concept_02_girl_sailor_motion.png", { frameWidth: 192, frameHeight: 192 });
+    this.load.spritesheet("char_03", "/assets/concept_motion/imagegen/sheets/concept_03_boy_blazer_motion.png", { frameWidth: 192, frameHeight: 192 });
+    this.load.spritesheet("char_04", "/assets/concept_motion/imagegen/sheets/concept_04_girl_blonde_motion.png", { frameWidth: 192, frameHeight: 192 });
+    this.load.spritesheet("char_05", "/assets/concept_motion/imagegen/sheets/concept_05_teacher_motion.png", { frameWidth: 192, frameHeight: 192 });
   }
 
   create() {
     const W = this.scale.width;   // 800
     const H = this.scale.height;  // 750
+
+    // ── Sprite animations (idle + walk per character) ──
+    for (let i = 1; i <= 5; i++) {
+      const key = `char_0${i}`;
+      if (!this.textures.exists(key)) continue;
+      if (!this.anims.exists(`${key}_idle`)) {
+        this.anims.create({ key: `${key}_idle`, frames: [{ key, frame: 0 }], frameRate: 1, repeat: -1 });
+      }
+      if (!this.anims.exists(`${key}_walk`)) {
+        this.anims.create({ key: `${key}_walk`, frames: this.anims.generateFrameNumbers(key, { frames: [1, 2] }), frameRate: 6, repeat: -1 });
+      }
+    }
 
     // ── Layer 0: Background image (full opacity — this IS the world) ──
     this.bgImage = this.add.image(0, 0, "classroom").setOrigin(0, 0);
@@ -369,29 +407,63 @@ class UnifiedSchoolScene extends Phaser.Scene {
     this._drawOverlaysAndHighlight("classroom");
   }
 
-  // ── Initialize character position data (no sprites — background has the characters) ──
+  // ── Pick a sprite texture key for a given character profile ──
+  _charKeyFor(profileId, isTeacher) {
+    if (isTeacher) return "char_05";
+    // Map S01..S20 → char_01..char_04 (4 student sprites, round-robin)
+    const m = /^S(\d+)$/.exec(profileId);
+    const idx = m ? parseInt(m[1], 10) : 1;
+    const slot = ((idx - 1) % 4) + 1; // 1..4
+    return `char_0${slot}`;
+  }
+
+  // ── Create a Phaser sprite for a character, or null if textures missing ──
+  _createCharSprite(profileId, isTeacher, x, y) {
+    const key = this._charKeyFor(profileId, isTeacher);
+    if (!this.textures.exists(key)) return null;
+    try {
+      const sprite = this.add.sprite(x, y, key, 0);
+      // Frame is 192x192; shrunk for 30-student classroom density.
+      const display = isTeacher ? 44 : 36;
+      sprite.setDisplaySize(display, display);
+      sprite.setOrigin(0.5, 0.85);
+      sprite.setDepth(50);
+      if (this.anims.exists(`${key}_idle`)) sprite.play(`${key}_idle`);
+      return sprite;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ── Initialize character position data + sprites ──
   _initCharacters() {
     const desks = AREA_POSITIONS.classroom.desks;
     const teacherPos = AREA_POSITIONS.classroom.teacher;
 
-    // Teacher — position data only, teacher focus indicator will animate
-    this.characters.set("teacher", {
+    // Teacher — position data + sprite
+    const teacherCh = {
       x: teacherPos.x, y: teacherPos.y,
       targetX: teacherPos.x, targetY: teacherPos.y,
       facing: "down", frame: 0, frameCounter: 0,
       isTeacher: true,
-    });
+    };
+    teacherCh.sprite = this._createCharSprite("teacher", true, teacherPos.x, teacherPos.y);
+    teacherCh.charKey = this._charKeyFor("teacher", true);
+    this.characters.set("teacher", teacherCh);
 
-    // Students — fixed desk positions matching background characters
+    // Students — fixed desk positions
     for (let i = 1; i < CHARACTER_PROFILES.length; i++) {
       const p = CHARACTER_PROFILES[i];
       const pos = desks[(i - 1) % desks.length];
-      this.characters.set(p.id, {
+      const ch = {
         x: pos.x, y: pos.y,
         targetX: pos.x, targetY: pos.y,
         facing: "down", frame: 0, frameCounter: 0,
         isTeacher: false,
-      });
+      };
+      ch.sprite = this._createCharSprite(p.id, false, pos.x, pos.y);
+      ch.charKey = this._charKeyFor(p.id, false);
+      this.characters.set(p.id, ch);
     }
 
     // Teacher focus indicator — a glowing circle that moves to target student
@@ -417,6 +489,31 @@ class UnifiedSchoolScene extends Phaser.Scene {
         tf.y = tf.targetY;
       }
     }
+
+    // Smoothly move character sprites toward their target positions and update animation state
+    const CHAR_SPEED = 1.8;
+    this.characters.forEach((ch) => {
+      const dx = ch.targetX - ch.x;
+      const dy = ch.targetY - ch.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const isWalking = dist > CHAR_SPEED;
+      if (isWalking) {
+        ch.x += (dx / dist) * CHAR_SPEED;
+        ch.y += (dy / dist) * CHAR_SPEED;
+        ch.facing = getFacing(dx, dy);
+      }
+      if (ch.sprite) {
+        ch.sprite.x = ch.x;
+        ch.sprite.y = ch.y;
+        ch.sprite.setFlipX(ch.facing === "left");
+        const key = ch.charKey;
+        const desired = isWalking ? `${key}_walk` : `${key}_idle`;
+        const cur = ch.sprite.anims && ch.sprite.anims.currentAnim;
+        if ((!cur || cur.key !== desired) && this.anims.exists(desired)) {
+          ch.sprite.play(desired);
+        }
+      }
+    });
 
     // Draw overlay indicators
     this._drawAllCharacters();
@@ -465,6 +562,20 @@ class UnifiedSchoolScene extends Phaser.Scene {
       }).setOrigin(0.5, 1).setDepth(1001);
       this._nameLabels.push(tLabel);
     }
+
+    // ── Fallback: draw graphics for characters whose sprite failed to load ──
+    this.characters.forEach((ch) => {
+      if (ch.sprite) return;
+      const profile = CHARACTER_PROFILES.find((p) => {
+        if (p.isTeacher && ch.isTeacher) return true;
+        return !p.isTeacher && !ch.isTeacher;
+      }) || CHARACTER_PROFILES[0];
+      try {
+        drawCharacter(g, ch.x, ch.y, profile.hair, profile.shirt, ch.facing, ch.frame, ch.isTeacher);
+      } catch (e) {
+        // ignore — fallback render failed
+      }
+    });
 
     // ── Student overlays (on top of background characters) ──
     this.characters.forEach((ch) => {

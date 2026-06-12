@@ -197,7 +197,7 @@ class AutoresearchOrchestrator:
         from src.calibration.applier import build_default_evaluator
 
         space = SearchSpace([
-            ParameterSpec("adhd_inattentive.frustration", 0.12, 0.25, default=0.19),
+            ParameterSpec("adhd_inattentive.anxiety", 0.05, 0.25, default=0.14),
             ...
         ])
         evaluator = build_default_evaluator(n_classes=3, max_turns=200)

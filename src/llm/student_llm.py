@@ -20,10 +20,9 @@ from src.llm.backend import LLMBackend
 from src.cache.response_cache import ResponseCache
 
 
-# Emotional state keys for structured output
+# Emotional state keys for structured output (3-dim after 8→3 reduction)
 EMOTION_KEYS = [
-    "frustration", "shame", "anxiety", "anger",
-    "loneliness", "excitement", "trust_in_teacher", "self_esteem",
+    "anxiety", "anger", "excitement",
 ]
 
 # Behavioral state keys
@@ -162,14 +161,9 @@ class StudentLLM:
         "escalation_risk": 0.0-1.0
     }},
     "emotions": {{
-        "frustration": 0.0-1.0,
-        "shame": 0.0-1.0,
         "anxiety": 0.0-1.0,
         "anger": 0.0-1.0,
-        "loneliness": 0.0-1.0,
-        "excitement": 0.0-1.0,
-        "trust_in_teacher": 0.0-1.0,
-        "self_esteem": 0.0-1.0
+        "excitement": 0.0-1.0
     }},
     "behaviors": ["행동1", "행동2"],
     "narrative": "1-2문장 행동 묘사 (한국어)",

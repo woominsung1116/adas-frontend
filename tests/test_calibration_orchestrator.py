@@ -204,24 +204,24 @@ def test_parse_key_wrong_parts():
 def test_parameter_override_mutates_and_restores():
     from src.simulation import cognitive_agent as ca
 
-    before = ca.EMOTIONAL_PRESETS["adhd_inattentive"]["shame"]
-    with parameter_override({"adhd_inattentive.emotional.shame": 0.05}) as errs:
+    before = ca.EMOTIONAL_PRESETS["adhd_inattentive"]["anxiety"]
+    with parameter_override({"adhd_inattentive.emotional.anxiety": 0.05}) as errs:
         assert not errs
-        after = ca.EMOTIONAL_PRESETS["adhd_inattentive"]["shame"]
-        # shame = BASE_EMOTIONAL + delta, clamped to [0, 1]
-        # BASE 0.08 + 0.05 = 0.13
-        assert abs(after - 0.13) < 1e-9
+        after = ca.EMOTIONAL_PRESETS["adhd_inattentive"]["anxiety"]
+        # anxiety = BASE_EMOTIONAL + delta, clamped to [0, 1]
+        # BASE 0.11 + 0.05 = 0.16
+        assert abs(after - 0.16) < 1e-9
     # Restored
-    assert ca.EMOTIONAL_PRESETS["adhd_inattentive"]["shame"] == before
+    assert ca.EMOTIONAL_PRESETS["adhd_inattentive"]["anxiety"] == before
 
 
 def test_parameter_override_base_emotional():
     from src.simulation import cognitive_agent as ca
 
-    original = ca.BASE_EMOTIONAL["shame"]
-    with parameter_override({"base_emotional.shame": 0.15}):
-        assert abs(ca.BASE_EMOTIONAL["shame"] - 0.15) < 1e-9
-    assert ca.BASE_EMOTIONAL["shame"] == original
+    original = ca.BASE_EMOTIONAL["anxiety"]
+    with parameter_override({"base_emotional.anxiety": 0.15}):
+        assert abs(ca.BASE_EMOTIONAL["anxiety"] - 0.15) < 1e-9
+    assert ca.BASE_EMOTIONAL["anxiety"] == original
 
 
 def test_parameter_override_integer_field_coercion():

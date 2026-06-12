@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Concept Character Motion Preview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111827;
+      --panel: #182033;
+      --line: #334155;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      background: rgba(17, 24, 39, 0.94);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(10px);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    label {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    select,
+    button {
+      height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #0f172a;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+    }
+
+    select {
+      padding: 0 30px 0 10px;
+    }
+
+    button {
+      padding: 0 12px;
+      cursor: pointer;
+    }
+
+    button:hover,
+    select:hover {
+      border-color: var(--accent);
+    }
+
+    input[type="range"] {
+      width: 120px;
+      accent-color: var(--accent);
+    }
+
+    main {
+      padding: 18px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(188px, 1fr));
+      gap: 14px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+
+    .stage {
+      display: grid;
+      place-items: center;
+      min-height: 178px;
+      background:
+        linear-gradient(45deg, #e5e7eb 25%, transparent 25%),
+        linear-gradient(-45deg, #e5e7eb 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #e5e7eb 75%),
+        linear-gradient(-45deg, transparent 75%, #e5e7eb 75%);
+      background-color: #f8fafc;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      background-size: 16px 16px;
+    }
+
+    canvas {
+      width: 160px;
+      height: 160px;
+      image-rendering: pixelated;
+    }
+
+    .meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 9px 10px;
+      border-top: 1px solid var(--line);
+      min-height: 38px;
+    }
+
+    .name {
+      overflow: hidden;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 650;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .frame {
+      color: var(--muted);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Concept Character Motion Preview</h1>
+    <div class="controls">
+      <label>
+        Motion
+        <select id="motion">
+          <option value="walk">Walk</option>
+          <option value="talk">Talk</option>
+          <option value="fidget">Fidget</option>
+          <option value="raise">Raise hand</option>
+          <option value="cycle">Cycle all</option>
+          <option value="idle">Idle</option>
+        </select>
+      </label>
+      <label>
+        Speed
+        <input id="speed" type="range" min="2" max="12" value="6" />
+      </label>
+      <button id="toggle" type="button">Pause</button>
+    </div>
+  </header>
+  <main>
+    <div id="grid" class="grid"></div>
+  </main>
+
+  <script>
+    const FRAME_W = 192;
+    const FRAME_H = 192;
+    const DISPLAY = 160;
+    const MOTION_SEQUENCES = {
+      idle: [0],
+      walk: [1, 2, 1, 2],
+      talk: [0, 3, 0, 3],
+      fidget: [0, 4, 0, 4],
+      raise: [0, 5, 5, 0],
+    };
+    const CYCLE_ORDER = ["idle", "walk", "talk", "fidget", "raise"];
+
+    const state = {
+      manifest: null,
+      sprites: [],
+      motion: "walk",
+      playing: true,
+      fps: 6,
+      lastTick: 0,
+      frameStep: 0,
+    };
+
+    const grid = document.querySelector("#grid");
+    const motionSelect = document.querySelector("#motion");
+    const speedInput = document.querySelector("#speed");
+    const toggleButton = document.querySelector("#toggle");
+
+    motionSelect.addEventListener("change", () => {
+      state.motion = motionSelect.value;
+      state.frameStep = 0;
+      drawAll();
+    });
+
+    speedInput.addEventListener("input", () => {
+      state.fps = Number(speedInput.value);
+    });
+
+    toggleButton.addEventListener("click", () => {
+      state.playing = !state.playing;
+      toggleButton.textContent = state.playing ? "Pause" : "Play";
+    });
+
+    function labelFromId(id) {
+      return id.replace(/^concept_\\d+_/, "").replaceAll("_", " ");
+    }
+
+    function activeMotion() {
+      if (state.motion !== "cycle") return state.motion;
+      return CYCLE_ORDER[Math.floor(state.frameStep / 12) % CYCLE_ORDER.length];
+    }
+
+    function activeFrame() {
+      const motion = activeMotion();
+      const sequence = MOTION_SEQUENCES[motion] || MOTION_SEQUENCES.idle;
+      return sequence[state.frameStep % sequence.length];
+    }
+
+    function drawSprite(sprite) {
+      const ctx = sprite.ctx;
+      const frameIndex = activeFrame();
+      const motion = activeMotion();
+      ctx.clearRect(0, 0, DISPLAY, DISPLAY);
+      ctx.imageSmoothingEnabled = false;
+
+      const bob = motion === "walk" ? Math.sin(state.frameStep * Math.PI) * 2 : 0;
+      const jitter = motion === "fidget" ? (state.frameStep % 2 === 0 ? -2 : 2) : 0;
+      ctx.drawImage(
+        sprite.image,
+        frameIndex * FRAME_W,
+        0,
+        FRAME_W,
+        FRAME_H,
+        jitter,
+        bob,
+        DISPLAY,
+        DISPLAY
+      );
+      sprite.frameText.textContent = `${motion} ${frameIndex}`;
+    }
+
+    function drawAll() {
+      state.sprites.forEach(drawSprite);
+    }
+
+    function animate(now) {
+      if (state.playing && now - state.lastTick > 1000 / state.fps) {
+        state.frameStep += 1;
+        state.lastTick = now;
+        drawAll();
+      }
+      requestAnimationFrame(animate);
+    }
+
+    async function init() {
+      const response = await fetch("./manifest.json");
+      state.manifest = await response.json();
+
+      await Promise.all(state.manifest.characters.map((character) => {
+        return new Promise((resolve) => {
+          const card = document.createElement("article");
+          card.className = "card";
+
+          const stage = document.createElement("div");
+          stage.className = "stage";
+          const canvas = document.createElement("canvas");
+          canvas.width = DISPLAY;
+          canvas.height = DISPLAY;
+          stage.appendChild(canvas);
+
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          const name = document.createElement("div");
+          name.className = "name";
+          name.textContent = labelFromId(character.id);
+          const frame = document.createElement("div");
+          frame.className = "frame";
+          frame.textContent = "loading";
+          meta.append(name, frame);
+
+          card.append(stage, meta);
+          grid.appendChild(card);
+
+          const image = new Image();
+          image.onload = () => {
+            state.sprites.push({
+              id: character.id,
+              image,
+              ctx: canvas.getContext("2d"),
+              frameText: frame,
+            });
+            resolve();
+          };
+          image.src = character.sheet;
+        });
+      }));
+
+      drawAll();
+      requestAnimationFrame(animate);
+    }
+
+    init().catch((error) => {
+      document.body.innerHTML = `<pre style="padding:18px;color:#fca5a5">${error.stack || error}</pre>`;
+    });
+  </script>
+</body>
+</html>

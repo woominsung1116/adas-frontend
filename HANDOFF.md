@@ -68,7 +68,7 @@ cd app && npx electron .
 
 | 모듈 | 파일 | 상태 |
 |---|---|---|
-| 학생 인지 에이전트 | `src/simulation/cognitive_agent.py` (~580줄) | ✅ 9 프로파일, 감정 8차원 |
+| 학생 인지 에이전트 | `src/simulation/cognitive_agent.py` (~580줄) | ✅ 9 프로파일, 감정 3차원(anxiety/anger/excitement) |
 | 950턴 교실 환경 | `src/simulation/classroom_env_v2.py` (~800줄) | ✅ 상호작용 엔진, 부분 관찰 |
 | 오케스트레이터 v2 | `src/simulation/orchestrator_v2.py` (~1200줄) | ✅ 5-phase, stream_class, 메모리 연결 |
 | 교사 메모리 | `src/simulation/teacher_memory.py` (~700줄) | ✅ Case Base (was_adhd 라벨) + Experience Base |
